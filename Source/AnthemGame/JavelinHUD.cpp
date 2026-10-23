@@ -171,7 +171,16 @@ void AJavelinHUD::DrawCrosshair(const AJavelinCharacter* Javelin, float CenterX,
 		Gap = FMath::Max(3.f, CenterX * FMath::Tan(HalfSpread) / FMath::Tan(HalfFOV));
 	}
 
-	const FLinearColor CrosshairColor = bCanFire ? FLinearColor(1.f, 1.f, 1.f, 0.85f) : FLinearColor(1.f, 1.f, 1.f, 0.3f);
+	// White normally, red when it's over an enemy (like Anthem), faded while the gun is stowed.
+	FLinearColor CrosshairColor(1.f, 1.f, 1.f, 0.85f);
+	if (!bCanFire)
+	{
+		CrosshairColor.A = 0.3f;
+	}
+	else if (Weapon->IsCrosshairOnTarget())
+	{
+		CrosshairColor = FLinearColor(1.f, 0.2f, 0.15f, 0.95f);
+	}
 	const float Length = 8.f;
 	DrawLine(CenterX - Gap - Length, CenterY, CenterX - Gap, CenterY, CrosshairColor, 2.f);
 	DrawLine(CenterX + Gap, CenterY, CenterX + Gap + Length, CenterY, CrosshairColor, 2.f);
