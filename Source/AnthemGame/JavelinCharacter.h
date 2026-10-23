@@ -11,6 +11,7 @@ class UStaticMeshComponent;
 class UMaterialInstanceDynamic;
 class UInputAction;
 class UInputMappingContext;
+class UJavelinAbilityComponent;
 class UJavelinHeatComponent;
 class UJavelinMovementComponent;
 class UJavelinSuitHealthComponent;
@@ -65,6 +66,8 @@ struct FJavelinSuitPose
  *  - F / Y: take off into flight from anywhere.
  *  - Left mouse / right trigger: fire. Right mouse / left trigger: hold to aim down sights.
  *  - R / X: reload. You can shoot on the ground, in the air and while hovering, but not while flying.
+ *  - Q / left bumper: frag grenade. E / right bumper: homing missiles. Each has its own cooldown,
+ *    and like the gun they can't be used while flying.
  *
  * The suit has shields and armor (UJavelinSuitHealthComponent). When the armor
  * runs out the suit goes down, and after a few seconds it reboots back at
@@ -94,6 +97,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Javelin")
 	UJavelinSuitHealthComponent* GetSuitHealth() const { return SuitHealth; }
+
+	UFUNCTION(BlueprintPure, Category = "Javelin")
+	UJavelinAbilityComponent* GetAbilities() const { return Abilities; }
 
 	/** True while the suit is down and rebooting. It can't move or shoot. */
 	UFUNCTION(BlueprintPure, Category = "Javelin")
@@ -133,6 +139,10 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UJavelinSuitHealthComponent> SuitHealth;
+
+	/** Gear: the frag grenade and homing missile launcher. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UJavelinAbilityComponent> Abilities;
 
 	/** How long the suit stays down before it reboots. */
 	UPROPERTY(EditAnywhere, Category = "Javelin|Health", meta = (ClampMin = "0", Units = "s"))
@@ -186,6 +196,10 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
 	TObjectPtr<UPointLightComponent> MuzzleLight;
+
+	/** Front of the missile pod on the left shoulder. Missiles come out here. */
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> MissileLauncher;
 
 	/** Jet flames on the back pack. Scaled along their length by thrust. */
 	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
@@ -244,6 +258,12 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> ReloadAction;
+
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> GrenadeAction;
+
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> MissileAction;
 
 	/** Gamepad look speed in degrees per second. */
 	UPROPERTY(EditAnywhere, Category = "Input")
@@ -330,6 +350,8 @@ private:
 	void OnAimPressed();
 	void OnAimReleased();
 	void OnReloadPressed();
+	void OnGrenadePressed();
+	void OnMissilePressed();
 
 	/** True while aiming or shortly after firing: the suit turns to face where the camera looks. */
 	bool IsInCombatStance() const;
@@ -357,6 +379,9 @@ private:
 
 	/** Builds the rifle in the right hand. Called from BuildSuit. */
 	void BuildGun(USceneComponent* Hand, UStaticMesh* Cube, UStaticMesh* Cylinder, UStaticMesh* Sphere);
+
+	/** Builds the missile pod over the left shoulder. Called from BuildSuit. */
+	void BuildMissilePod(USceneComponent* Torso, UStaticMesh* Cube, UStaticMesh* Cylinder);
 
 	FJavelinSuitPose CurrentPose;
 	float WalkPhase = 0.f;

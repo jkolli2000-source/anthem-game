@@ -119,6 +119,16 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Weapon")
 	bool IsCrosshairOnTarget() const;
 
+	/** The point in the world under the center of the crosshair. Gear aims here too. */
+	UFUNCTION(BlueprintPure, Category = "Weapon")
+	FVector GetAimPoint() const;
+
+	/** Shows a hit marker and damage number, for damage done by something else the player fired, like a grenade. */
+	void AddHitFeedback(const FVector& Location, float Amount, bool bWeakSpot, bool bKill);
+
+	/** Whether an actor is an enemy or shooting target that's still alive. */
+	static bool IsLivingTarget(const AActor* Actor);
+
 	UFUNCTION(BlueprintPure, Category = "Weapon")
 	bool IsReloading() const { return bReloading; }
 

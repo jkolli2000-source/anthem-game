@@ -2,7 +2,7 @@
 
 A flying exosuit ("javelin") action game inspired by Anthem, built in **Unreal Engine 5** with C++.
 
-**Current milestone: 1, flight feel.** You can walk, sprint, jump, hover and fly a placeholder Ranger suit around a graybox course. Flying builds **heat**; overheat and you drop out of the sky until the suit cools. Water, the waterfall and steep dives cool you down. You also carry an **assault rifle** with aiming, ammo, reloads and hit effects, and there's a shooting range next to the start. Your suit has **shields and armor**, and an **enemy camp** sends waves of ground soldiers and flying drones that chase you and shoot back.
+**Current milestone: 1, flight feel.** You can walk, sprint, jump, hover and fly a placeholder Ranger suit around a graybox course. Flying builds **heat**; overheat and you drop out of the sky until the suit cools. Water, the waterfall and steep dives cool you down. You also carry an **assault rifle** with aiming, ammo, reloads and hit effects, and there's a shooting range next to the start. Your suit has **shields and armor**, and an **enemy camp** sends waves of ground soldiers and flying drones that chase you and shoot back. For bigger hits you have two pieces of Anthem-style **gear**, a frag grenade and a homing missile launcher, each on its own cooldown.
 
 The full design is in the project's UE5 implementation plan. Characters are placeholder shapes for now; art comes later.
 
@@ -74,8 +74,10 @@ You don't need to place anything. When you press Play, the game spawns your jave
 | Fire (hold for full auto) | Left mouse | Right trigger |
 | Aim down sights (hold) | Right mouse | Left trigger |
 | Reload | R | X |
+| Frag grenade | Q | Left bumper |
+| Homing missiles | E | Right bumper |
 
-You can shoot on the ground, while jumping or falling, and while hovering. Like in Anthem, the gun is stowed while you fly: press **Space** to drop into a hover and shoot.
+You can shoot and use gear on the ground, while jumping or falling, and while hovering. Like in Anthem, weapons and gear are stowed while you fly: press **Space** to drop into a hover and shoot.
 
 ### Things to try
 
@@ -87,6 +89,9 @@ You can shoot on the ground, while jumping or falling, and while hovering. Like 
 - **Camera:** like Anthem, the camera sits over your right shoulder, so your suit stands a little left of center and the crosshair has a clear view. The crosshair turns **red** when it's over an enemy. In flight the camera swings in behind you and pulls far back.
 - **Aim down sights:** hold the right mouse button to zoom over the shoulder and tighten your spread. Long bursts bloom the crosshair; let go briefly to recover accuracy.
 - **Hover and shoot:** jump, press **Space** to hover, and shoot the drones in the air.
+- **Frag grenade (Q):** your suit throws a grenade over its left shoulder toward the crosshair. It blows up when it hits anything and damages every enemy in the blast, which is about 10 m across and hits hardest in the middle. Throw it into a group of soldiers. It recharges in 8 seconds.
+- **Homing missiles (E):** while the launcher is ready, blue corner brackets appear on up to four enemies near your crosshair. Press **E** and four missiles pop out of the pod on your left shoulder and curve in to hit them, even drones that are moving. With nothing bracketed they fly at the crosshair. They recharge in 12 seconds.
+- **Cooldown icons:** the two squares to the right of the heat bar are your gear. While one recharges it fills up from the bottom and counts down; it lights up and flashes when it's ready. If you press the key too early (or while flying) the border flashes red.
 - **Ammo:** a magazine holds 30 rounds and reloads automatically when empty (or press **R**). When your reserve runs out, walk up to the green crate with the yellow stripe to refill.
 - **Fight the enemy camp:** turn around from the start and follow the red **ENEMY CAMP** marker (about 110 m away, behind and to the left). Soldiers walk toward you and fire bursts of red bolts; drones circle above you and fire big purple orbs. Their weak spots glow (soldiers: the visor and the power cell on the back; drones: the eye) and flare bright just before they fire, so watch for the flash and dodge. Clear a wave and a bigger one arrives after 12 seconds.
 - **Shields and armor:** the blue bar (bottom left) is shields, the orange bar is armor. Hits take shields first; shields recharge on their own after 4 seconds without being hit, so duck behind a wall. Armor doesn't recharge: pick up the **green orbs** enemies drop. **White orbs** give ammo. Red arcs around the crosshair point toward whoever is shooting you.
@@ -103,6 +108,7 @@ Every value is exposed in the editor. While playing, press **F8** to detach from
 - **Camera** for the camera profile used on foot, sprinting, hovering, flying and aiming. Socket Offset Y moves the camera sideways (bigger = suit further left), Arm Length is the distance behind you.
 - **Weapon** for damage, fire rate, magazine size, reload time, spread and recoil.
 - **Suit Health** for shields, armor and how fast shields recharge.
+- **Gear** (on the **Abilities** component) for cooldowns, grenade damage and blast size, missile count, damage and lock-on range.
 - To tune enemies, select one of them (they're listed as **EnemySoldier** and **EnemyDrone** in the Outliner while playing) and look under **Enemy**: health, speed, sight range, damage, fire rate, aim. The **EnemyEncounter** actor has the wave sizes.
 
 Changes made while playing are lost when you stop. To keep a value, change its default in the C++ files under `Source/AnthemGame` (or ask for a change).
@@ -130,9 +136,12 @@ Changes made while playing are lost when you stop. To keep a value, change its d
 | `EnemyProjectile` | The glowing bolts enemies fire. Visible and dodgeable. |
 | `EnemyEncounter` | The enemy camp: spawns waves of soldiers and drones, bigger each time. |
 | `PickupOrb` | Green (armor) and white (ammo) orbs dropped by enemies. |
-| `JavelinHUD` | Crosshair, hit markers, damage numbers, health bars, ammo, shields and armor, damage direction, heat bar, wave status, speed and controls reminder. |
+| `JavelinAbilityComponent` | Gear: the frag grenade and homing missiles, their cooldowns, missile lock-on, and blast damage. |
+| `JavelinGrenade` | The thrown grenade: arcs, blows up on impact. |
+| `JavelinMissile` | One homing missile: pops out of the pod, speeds up and curves into its target. |
+| `JavelinHUD` | Crosshair, hit markers, damage numbers, health bars, ammo, shields and armor, damage direction, heat bar, gear cooldown icons, missile lock brackets, wave status, speed and controls reminder. |
 
-Input is created in code, so no input assets are needed yet. The plan's next milestone moves heat and flight into the Gameplay Ability System.
+Input is created in code, so no input assets are needed yet. The plan's next milestone moves heat, flight and gear into the Gameplay Ability System.
 
 ## Saving your work to GitHub
 

@@ -62,10 +62,12 @@ void AJavelinHUD::DrawHUD()
 	}
 	else
 	{
+		DrawMissileLocks(Javelin);
 		DrawCrosshair(Javelin, CenterX, CenterY);
 	}
 	DrawWeaponInfo(Weapon);
 	DrawSuitStatus(Javelin);
+	DrawGear(Javelin, CenterX);
 	DrawEncounterInfo(Javelin, CenterX);
 
 	// Heat bar under the crosshair area. Green when cool, red near overheating.
@@ -131,6 +133,7 @@ void AJavelinHUD::DrawHUD()
 			TEXT("Shift  hold to sprint / fly while airborne / stop flying"),
 			TEXT("F  take off straight into flight"),
 			TEXT("Left mouse  fire     Right mouse  aim     R  reload"),
+			TEXT("Q  frag grenade     E  homing missiles (lock onto enemies near the crosshair)"),
 			TEXT("Guns are stowed while flying: press Space to hover and shoot"),
 			TEXT("In flight: W boost, S slow, dive steeply or skim water to cool"),
 			TEXT("Enemy camp: follow the red marker. Aim for glowing weak spots"),
@@ -481,4 +484,153 @@ void AJavelinHUD::DrawSuitDown(const AJavelinCharacter* Javelin, float CenterX, 
 	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
 	DrawCenteredText(TEXT("SUIT DOWN"), EnemyColor, CenterX, CenterY - 50.f, 2.5f);
 	DrawCenteredText(FString::Printf(TEXT("Rebooting in %d..."), FMath::CeilToInt(Javelin->GetTimeUntilReboot())), FLinearColor::White, CenterX, CenterY + 10.f, 1.2f);
+}
+
+void AJavelinHUD::DrawGear(const AJavelinCharacter* Javelin, float CenterX)
+{
+	// Two gear icons to the right of the heat bar, Anthem style. While cooling down the icon fills up from the
+	// bottom and shows the seconds left; when it's ready it lights up in the gear's color and flashes once.
+	const UJavelinAbilityComponent* Abilities = Javelin->GetAbilities();
+	if (!Abilities)
+	{
+		return;
+	}
+
+	struct FGearIcon
+	{
+		EJavelinGear Gear;
+		const TCHAR* Key;
+	};
+	const FGearIcon Icons[] = { { EJavelinGear::Grenade, TEXT("Q") }, { EJavelinGear::Missiles, TEXT("E") } };
+
+	const float Size = 54.f;
+	const float Gap = 14.f;
+	const float Top = Canvas->ClipY - 124.f;
+	const float Left = CenterX + 240.f;
+	const bool bUsable = Javelin->CanFireWeapon();
+	UFont* SmallFont = GEngine->GetSmallFont();
+
+	for (int32 Index = 0; Index < static_cast<int32>(UE_ARRAY_COUNT(Icons)); ++Index)
+	{
+		const EJavelinGear Gear = Icons[Index].Gear;
+		const FJavelinGearSlot& Slot = Abilities->GetSlot(Gear);
+		const bool bReady = Abilities->IsGearReady(Gear);
+		const float X = Left + Index * (Size + Gap);
+		const float MidX = X + Size * 0.5f;
+		const float MidY = Top + Size * 0.5f;
+
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.6f), X - 2.f, Top - 2.f, Size + 4.f, Size + 4.f);
+		if (bReady)
+		{
+			FLinearColor Fill = Slot.Color;
+			Fill.A = bUsable ? 0.3f : 0.12f;
+			DrawRect(Fill, X, Top, Size, Size);
+		}
+		else
+		{
+			const float Percent = Abilities->GetCooldownPercent(Gear);
+			FLinearColor Fill = Slot.Color * 0.45f;
+			Fill.A = 0.7f;
+			DrawRect(Fill, X, Top + Size * (1.f - Percent), Size, Size * Percent);
+		}
+
+		FLinearColor GlyphColor = FLinearColor::White;
+		GlyphColor.A = bReady ? (bUsable ? 1.f : 0.4f) : 0.3f;
+		DrawGearGlyph(Gear, MidX, MidY, GlyphColor);
+		if (!bReady)
+		{
+			DrawCenteredText(FString::FromInt(FMath::CeilToInt(Abilities->GetCooldownRemaining(Gear))), FLinearColor::White, MidX, MidY - 12.f, 1.3f);
+		}
+
+		// Border: gear color when ready, grey while cooling down, a white flash the moment it's ready again,
+		// and a red flash if you try to use it too early.
+		FLinearColor Border = bReady ? Slot.Color : FLinearColor(0.5f, 0.5f, 0.5f, 0.8f);
+		const float SinceReady = Abilities->GetTimeSinceReady(Gear);
+		if (bReady && SinceReady < 0.5f)
+		{
+			Border = FLinearColor::LerpUsingHSV(FLinearColor::White, Slot.Color, SinceReady / 0.5f);
+		}
+		const float SinceDenied = Abilities->GetTimeSinceDenied(Gear);
+		if (SinceDenied < 0.3f)
+		{
+			Border = KillColor;
+		}
+		const float Thickness = bReady ? 2.f : 1.f;
+		DrawLine(X, Top, X + Size, Top, Border, Thickness);
+		DrawLine(X + Size, Top, X + Size, Top + Size, Border, Thickness);
+		DrawLine(X + Size, Top + Size, X, Top + Size, Border, Thickness);
+		DrawLine(X, Top + Size, X, Top, Border, Thickness);
+
+		const FString Label = FString::Printf(TEXT("%s  %s"), Icons[Index].Key, *Slot.ShortName.ToString());
+		float LabelWidth = 0.f;
+		float LabelHeight = 0.f;
+		GetTextSize(Label, LabelWidth, LabelHeight, SmallFont);
+		DrawText(Label, FLinearColor(1.f, 1.f, 1.f, 0.8f), MidX - LabelWidth * 0.5f, Top + Size + 5.f, SmallFont);
+	}
+}
+
+void AJavelinHUD::DrawGearGlyph(EJavelinGear Gear, float CenterX, float CenterY, const FLinearColor& Color)
+{
+	if (Gear == EJavelinGear::Grenade)
+	{
+		// A round grenade with its fuse cap and pin ring on top.
+		const float Radius = 12.f;
+		const int32 Segments = 12;
+		const float Y = CenterY + 4.f;
+		for (int32 Index = 0; Index < Segments; ++Index)
+		{
+			const float A = UE_TWO_PI * Index / Segments;
+			const float B = UE_TWO_PI * (Index + 1) / Segments;
+			DrawLine(CenterX + FMath::Cos(A) * Radius, Y + FMath::Sin(A) * Radius, CenterX + FMath::Cos(B) * Radius, Y + FMath::Sin(B) * Radius, Color, 3.f);
+		}
+		DrawRect(Color, CenterX - 4.f, Y - Radius - 6.f, 8.f, 6.f);
+		DrawLine(CenterX + 4.f, Y - Radius - 4.f, CenterX + 11.f, Y - Radius + 2.f, Color, 2.f);
+		DrawLine(CenterX + 4.f, Y - Radius - 6.f, CenterX + 10.f, Y - Radius - 11.f, Color, 2.f);
+		return;
+	}
+
+	// Three missiles side by side, noses up.
+	for (const float Offset : { -12.f, 0.f, 12.f })
+	{
+		const float X = CenterX + Offset;
+		const float Lift = Offset == 0.f ? 4.f : 0.f;
+		const float Bottom = CenterY + 13.f - Lift;
+		const float Shoulder = CenterY - 5.f - Lift;
+		DrawLine(X, Bottom, X, Shoulder, Color, 4.f);
+		DrawLine(X - 2.5f, Shoulder, X, Shoulder - 7.f, Color, 2.f);
+		DrawLine(X + 2.5f, Shoulder, X, Shoulder - 7.f, Color, 2.f);
+		DrawLine(X - 2.f, Bottom - 4.f, X - 5.f, Bottom + 1.f, Color, 2.f);
+		DrawLine(X + 2.f, Bottom - 4.f, X + 5.f, Bottom + 1.f, Color, 2.f);
+	}
+}
+
+void AJavelinHUD::DrawMissileLocks(const AJavelinCharacter* Javelin)
+{
+	// Corner brackets around each enemy the missiles would go after, so you know what pressing E will hit.
+	const UJavelinAbilityComponent* Abilities = Javelin->GetAbilities();
+	if (!Abilities)
+	{
+		return;
+	}
+	const FLinearColor BaseColor = Abilities->GetSlot(EJavelinGear::Missiles).Color;
+	const float Pulse = 0.75f + 0.25f * FMath::Sin(GetWorld()->GetTimeSeconds() * 8.f);
+	const FLinearColor Color(BaseColor.R, BaseColor.G, BaseColor.B, Pulse);
+
+	for (const TWeakObjectPtr<AActor>& Lock : Abilities->GetMissileLocks())
+	{
+		FVector2D Screen;
+		if (!Lock.IsValid() || !ProjectToScreen(UJavelinAbilityComponent::GetTargetCenter(Lock.Get()), Screen))
+		{
+			continue;
+		}
+		const float Half = 18.f;
+		const float Arm = 7.f;
+		for (const FVector2D Corner : { FVector2D(1.f, 1.f), FVector2D(-1.f, 1.f), FVector2D(1.f, -1.f), FVector2D(-1.f, -1.f) })
+		{
+			const float CornerX = Screen.X + Corner.X * Half;
+			const float CornerY = Screen.Y + Corner.Y * Half;
+			DrawLine(CornerX, CornerY, CornerX - Corner.X * Arm, CornerY, Color, 2.f);
+			DrawLine(CornerX, CornerY, CornerX, CornerY - Corner.Y * Arm, Color, 2.f);
+		}
+	}
 }
