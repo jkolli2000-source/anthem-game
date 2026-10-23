@@ -13,6 +13,8 @@ class UInputAction;
 class UInputMappingContext;
 class UJavelinHeatComponent;
 class UJavelinMovementComponent;
+class UJavelinWeaponComponent;
+class UPointLightComponent;
 struct FInputActionValue;
 
 /** Camera framing for one movement state. The camera blends between these. */
@@ -59,6 +61,8 @@ struct FJavelinSuitPose
  *  - Space / A: jump on the ground, hover in the air, stop hovering, or switch flight to hover.
  *  - Left Shift / left stick click: hold to sprint on the ground, start flying in the air, stop flying in flight.
  *  - F / Y: take off into flight from anywhere.
+ *  - Left mouse / right trigger: fire. Right mouse / left trigger: hold to aim down sights.
+ *  - R / X: reload. You can shoot on the ground, in the air and while hovering, but not while flying.
  */
 UCLASS()
 class ANTHEMGAME_API AJavelinCharacter : public ACharacter
@@ -78,6 +82,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Javelin")
 	UJavelinHeatComponent* GetHeatComponent() const { return Heat; }
 
+	UFUNCTION(BlueprintPure, Category = "Javelin")
+	UJavelinWeaponComponent* GetWeapon() const { return Weapon; }
+
+	/** Guns are stowed while flying, like in Anthem. Hover to shoot from the air. */
+	UFUNCTION(BlueprintPure, Category = "Javelin")
+	bool CanFireWeapon() const;
+
+	/** Aiming down sights also needs you not to be sprinting. */
+	UFUNCTION(BlueprintPure, Category = "Javelin")
+	bool CanAimWeapon() const;
+
 	UFUNCTION(BlueprintCallable, Category = "Javelin")
 	bool TryStartFlight();
 
@@ -95,6 +110,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UJavelinHeatComponent> Heat;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UJavelinWeaponComponent> Weapon;
 
 	/** Root of the mech suit, built from basic shapes. Tilted for flight pitch and banking. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
@@ -131,6 +149,16 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
 	TObjectPtr<USceneComponent> RightKnee;
 
+	/** End of the gun barrel, held in the right hand. Shots and tracers start here. */
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> Muzzle;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<UStaticMeshComponent> MuzzleFlash;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<UPointLightComponent> MuzzleLight;
+
 	/** Jet flames on the back pack. Scaled along their length by thrust. */
 	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
 	TArray<TObjectPtr<USceneComponent>> BackFlames;
@@ -155,6 +183,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Visuals|Paint")
 	FLinearColor AccentColor = FLinearColor(0.1f, 0.8f, 1.f);
 
+	UPROPERTY(EditAnywhere, Category = "Visuals|Paint")
+	FLinearColor MuzzleFlashColor = FLinearColor(1.f, 0.8f, 0.35f);
+
 	/** Leave empty to use the built-in key bindings. Set these to use your own input assets instead. */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputMappingContext> DefaultMappingContext;
@@ -177,9 +208,22 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> LaunchAction;
 
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> FireAction;
+
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> AimAction;
+
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> ReloadAction;
+
 	/** Gamepad look speed in degrees per second. */
 	UPROPERTY(EditAnywhere, Category = "Input")
 	float StickLookRate = 160.f;
+
+	/** Look speed multiplier while aiming down sights, for finer aim. */
+	UPROPERTY(EditAnywhere, Category = "Input", meta = (ClampMin = "0.05", ClampMax = "1"))
+	float AimLookScale = 0.6f;
 
 	UPROPERTY(EditAnywhere, Category = "Camera")
 	FJavelinCameraProfile GroundCamera;
@@ -192,6 +236,14 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Camera")
 	FJavelinCameraProfile FlightCamera;
+
+	/** Over-the-shoulder zoom while aiming down sights. */
+	UPROPERTY(EditAnywhere, Category = "Camera")
+	FJavelinCameraProfile AimCamera;
+
+	/** Aiming zooms in faster than the other camera changes. */
+	UPROPERTY(EditAnywhere, Category = "Camera")
+	float AimCameraBlendSpeed = 14.f;
 
 	/** How quickly the camera blends to a new profile. */
 	UPROPERTY(EditAnywhere, Category = "Camera")
@@ -237,6 +289,16 @@ private:
 	void OnThrustPressed();
 	void OnThrustReleased();
 	void OnLaunchPressed();
+	void OnFirePressed();
+	void OnFireReleased();
+	void OnAimPressed();
+	void OnAimReleased();
+	void OnReloadPressed();
+
+	/** True while aiming or shortly after firing: the suit turns to face where the camera looks. */
+	bool IsInCombatStance() const;
+	void UpdateCombatFacing();
+	void UpdateMuzzleFlash();
 
 	UFUNCTION()
 	void HandleOverheated();
@@ -247,6 +309,9 @@ private:
 	/** Shared by every thruster glow and flame, so they all change color together. */
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> ThrusterMaterial;
+
+	/** Builds the rifle in the right hand. Called from BuildSuit. */
+	void BuildGun(USceneComponent* Hand, UStaticMesh* Cube, UStaticMesh* Cylinder, UStaticMesh* Sphere);
 
 	FJavelinSuitPose CurrentPose;
 	float WalkPhase = 0.f;

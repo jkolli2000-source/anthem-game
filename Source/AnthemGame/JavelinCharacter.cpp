@@ -1,8 +1,10 @@
 #include "JavelinCharacter.h"
 #include "JavelinHeatComponent.h"
 #include "JavelinMovementComponent.h"
+#include "JavelinWeaponComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/StaticMesh.h"
@@ -44,6 +46,11 @@ namespace
 	const FName PaintFrame(TEXT("Paint.Frame"));
 	const FName PaintAccent(TEXT("Paint.Accent"));
 	const FName PaintGlow(TEXT("Paint.Glow"));
+	const FName PaintMuzzle(TEXT("Paint.Muzzle"));
+
+	/** How long the suit keeps facing the aim direction after the last shot. */
+	constexpr float CombatStanceTime = 1.f;
+	constexpr float MuzzleFlashTime = 0.05f;
 
 	const FLinearColor ThrusterIdleColor(0.2f, 0.2f, 0.22f);
 	const FLinearColor ThrusterCoolColor(0.1f, 0.7f, 1.f);
@@ -66,6 +73,7 @@ AJavelinCharacter::AJavelinCharacter(const FObjectInitializer& ObjectInitializer
 	SprintCamera = MakeCameraProfile(390.f, FVector(0.f, 50.f, 50.f), 98.f, 12.f);
 	HoverCamera = MakeCameraProfile(300.f, FVector(0.f, 80.f, 70.f), 85.f, 15.f);
 	FlightCamera = MakeCameraProfile(650.f, FVector(0.f, 0.f, 110.f), 100.f, 8.f);
+	AimCamera = MakeCameraProfile(170.f, FVector(0.f, 75.f, 65.f), 60.f, 30.f);
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
@@ -82,6 +90,7 @@ AJavelinCharacter::AJavelinCharacter(const FObjectInitializer& ObjectInitializer
 	FollowCamera->FieldOfView = GroundCamera.FieldOfView;
 
 	Heat = CreateDefaultSubobject<UJavelinHeatComponent>(TEXT("Heat"));
+	Weapon = CreateDefaultSubobject<UJavelinWeaponComponent>(TEXT("Weapon"));
 
 	BuildSuit();
 }
@@ -183,6 +192,10 @@ void AJavelinCharacter::BuildSuit()
 		CreatePart(PartName(TEXT("Gauntlet")), Elbow, Cube, FVector(3.f, 9.f * S, -14.f), FVector(0.2f, 0.06f, 0.22f), PaintPrimary);
 		CreatePart(PartName(TEXT("WristGlow")), Elbow, Cylinder, FVector(2.f, 0.f, -35.f), FVector(0.19f, 0.19f, 0.03f), PaintGlow);
 		CreatePart(PartName(TEXT("Hand")), Elbow, Cube, FVector(3.f, 0.f, -43.f), FVector(0.15f, 0.12f, 0.14f), PaintFrame);
+		if (Side == 1)
+		{
+			BuildGun(Elbow, Cube, Cylinder, Sphere);
+		}
 
 		// Leg: hip > knee > foot
 		USceneComponent* Hip = CreatePivot(PartName(TEXT("Hip")), VisualRoot, FVector(0.f, 19.f * S, -14.f));
@@ -202,6 +215,35 @@ void AJavelinCharacter::BuildSuit()
 		(Side == 0 ? LeftHip : RightHip) = Hip;
 		(Side == 0 ? LeftKnee : RightKnee) = Knee;
 	}
+}
+
+void AJavelinCharacter::BuildGun(USceneComponent* Hand, UStaticMesh* Cube, UStaticMesh* Cylinder, UStaticMesh* Sphere)
+{
+	// An assault rifle gripped in the right hand, its barrel running on down the line of the forearm.
+	// In the elbow's space -Z runs down the forearm and +X is the top of the gun when the arm is raised to aim.
+	CreatePart(TEXT("GunReceiver"), Hand, Cube, FVector(3.f, 0.f, -58.f), FVector(0.16f, 0.09f, 0.4f), PaintFrame);
+	CreatePart(TEXT("GunTrim"), Hand, Cube, FVector(3.f, 4.8f, -58.f), FVector(0.1f, 0.01f, 0.3f), PaintTrim);
+	CreatePart(TEXT("GunMagazine"), Hand, Cube, FVector(-6.f, 0.f, -64.f), FVector(0.1f, 0.06f, 0.14f), PaintSecondary, FRotator(-10.f, 0.f, 0.f));
+	CreatePart(TEXT("GunSight"), Hand, Cube, FVector(12.f, 0.f, -52.f), FVector(0.04f, 0.04f, 0.1f), PaintAccent);
+	CreatePart(TEXT("GunShroud"), Hand, Cylinder, FVector(6.f, 0.f, -84.f), FVector(0.08f, 0.08f, 0.12f), PaintSecondary);
+	CreatePart(TEXT("GunBarrel"), Hand, Cylinder, FVector(6.f, 0.f, -95.f), FVector(0.05f, 0.05f, 0.24f), PaintFrame);
+
+	Muzzle = CreatePivot(TEXT("Muzzle"), Hand, FVector(6.f, 0.f, -108.f));
+
+	MuzzleFlash = CreatePart(TEXT("MuzzleFlash"), Muzzle, Sphere, FVector(0.f, 0.f, -8.f), FVector(0.14f, 0.14f, 0.24f), PaintMuzzle);
+	MuzzleFlash->SetCastShadow(false);
+	MuzzleFlash->SetVisibility(false);
+
+	MuzzleLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("MuzzleLight"));
+	MuzzleLight->SetupAttachment(Muzzle);
+	MuzzleLight->SetRelativeLocation(FVector(0.f, 0.f, -10.f));
+	MuzzleLight->SetMobility(EComponentMobility::Movable);
+	MuzzleLight->IntensityUnits = ELightUnits::Candelas;
+	MuzzleLight->Intensity = 600.f;
+	MuzzleLight->AttenuationRadius = 600.f;
+	MuzzleLight->LightColor = MuzzleFlashColor.ToFColor(true);
+	MuzzleLight->CastShadows = false;
+	MuzzleLight->SetVisibility(false);
 }
 
 UJavelinMovementComponent* AJavelinCharacter::GetJavelinMovement() const
@@ -224,6 +266,7 @@ void AJavelinCharacter::BeginPlay()
 		{ PaintTrim, TrimColor },
 		{ PaintFrame, FrameColor },
 		{ PaintAccent, AccentColor },
+		{ PaintMuzzle, MuzzleFlashColor },
 	};
 
 	TInlineComponentArray<UStaticMeshComponent*> Parts(this);
@@ -250,6 +293,8 @@ void AJavelinCharacter::BeginPlay()
 	}
 
 	Heat->OnOverheated.AddDynamic(this, &AJavelinCharacter::HandleOverheated);
+	Weapon->SetMuzzle(Muzzle);
+	MuzzleLight->SetLightColor(MuzzleFlashColor);
 	LastYaw = GetActorRotation().Yaw;
 }
 
@@ -289,6 +334,9 @@ void AJavelinCharacter::CreateDefaultInput()
 	JumpAction = MakeAction(TEXT("IA_Jump"), EInputActionValueType::Boolean);
 	ThrustAction = MakeAction(TEXT("IA_Thrust"), EInputActionValueType::Boolean);
 	LaunchAction = MakeAction(TEXT("IA_Launch"), EInputActionValueType::Boolean);
+	FireAction = MakeAction(TEXT("IA_Fire"), EInputActionValueType::Boolean);
+	AimAction = MakeAction(TEXT("IA_Aim"), EInputActionValueType::Boolean);
+	ReloadAction = MakeAction(TEXT("IA_Reload"), EInputActionValueType::Boolean);
 
 	UInputMappingContext* Context = NewObject<UInputMappingContext>(this, TEXT("IMC_Javelin"));
 
@@ -329,6 +377,12 @@ void AJavelinCharacter::CreateDefaultInput()
 	Map(ThrustAction, EKeys::Gamepad_LeftThumbstick);
 	Map(LaunchAction, EKeys::F);
 	Map(LaunchAction, EKeys::Gamepad_FaceButton_Top);
+	Map(FireAction, EKeys::LeftMouseButton);
+	Map(FireAction, EKeys::Gamepad_RightTrigger);
+	Map(AimAction, EKeys::RightMouseButton);
+	Map(AimAction, EKeys::Gamepad_LeftTrigger);
+	Map(ReloadAction, EKeys::R);
+	Map(ReloadAction, EKeys::Gamepad_FaceButton_Left);
 
 	DefaultMappingContext = Context;
 }
@@ -372,6 +426,20 @@ void AJavelinCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	{
 		Input->BindAction(LaunchAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnLaunchPressed);
 	}
+	if (FireAction)
+	{
+		Input->BindAction(FireAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnFirePressed);
+		Input->BindAction(FireAction, ETriggerEvent::Completed, this, &AJavelinCharacter::OnFireReleased);
+	}
+	if (AimAction)
+	{
+		Input->BindAction(AimAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnAimPressed);
+		Input->BindAction(AimAction, ETriggerEvent::Completed, this, &AJavelinCharacter::OnAimReleased);
+	}
+	if (ReloadAction)
+	{
+		Input->BindAction(ReloadAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnReloadPressed);
+	}
 }
 
 void AJavelinCharacter::Move(const FInputActionValue& Value)
@@ -398,14 +466,14 @@ void AJavelinCharacter::MoveCompleted()
 
 void AJavelinCharacter::Look(const FInputActionValue& Value)
 {
-	const FVector2D Axis = Value.Get<FVector2D>();
+	const FVector2D Axis = Value.Get<FVector2D>() * (Weapon->IsAiming() ? AimLookScale : 1.f);
 	AddControllerYawInput(Axis.X);
 	AddControllerPitchInput(Axis.Y);
 }
 
 void AJavelinCharacter::LookStick(const FInputActionValue& Value)
 {
-	const FVector2D Axis = Value.Get<FVector2D>() * StickLookRate * GetWorld()->GetDeltaSeconds();
+	const FVector2D Axis = Value.Get<FVector2D>() * StickLookRate * GetWorld()->GetDeltaSeconds() * (Weapon->IsAiming() ? AimLookScale : 1.f);
 	AddControllerYawInput(Axis.X);
 	AddControllerPitchInput(Axis.Y);
 }
@@ -479,6 +547,73 @@ void AJavelinCharacter::OnLaunchPressed()
 	}
 }
 
+void AJavelinCharacter::OnFirePressed()
+{
+	// Shooting stops a sprint. Holding the trigger while flying starts firing as soon as you hover.
+	GetJavelinMovement()->SetSprinting(false);
+	Weapon->SetTriggerHeld(true);
+}
+
+void AJavelinCharacter::OnFireReleased()
+{
+	Weapon->SetTriggerHeld(false);
+}
+
+void AJavelinCharacter::OnAimPressed()
+{
+	GetJavelinMovement()->SetSprinting(false);
+	Weapon->SetWantsToAim(true);
+}
+
+void AJavelinCharacter::OnAimReleased()
+{
+	Weapon->SetWantsToAim(false);
+}
+
+void AJavelinCharacter::OnReloadPressed()
+{
+	Weapon->StartReload();
+}
+
+bool AJavelinCharacter::CanFireWeapon() const
+{
+	return !GetJavelinMovement()->IsInFlight();
+}
+
+bool AJavelinCharacter::CanAimWeapon() const
+{
+	return CanFireWeapon() && !GetJavelinMovement()->IsSprinting();
+}
+
+bool AJavelinCharacter::IsInCombatStance() const
+{
+	return CanFireWeapon() && (Weapon->IsAiming() || Weapon->GetTimeSinceLastShot() < CombatStanceTime);
+}
+
+void AJavelinCharacter::UpdateCombatFacing()
+{
+	// On foot and falling the suit normally turns toward where it moves. In combat it faces the crosshair instead,
+	// so you can strafe while shooting. Hover already faces the camera, and flight steers itself.
+	UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
+	const bool bFaceAim = IsInCombatStance();
+	JavelinMovement->bOrientRotationToMovement = !bFaceAim;
+	JavelinMovement->bUseControllerDesiredRotation = bFaceAim;
+}
+
+void AJavelinCharacter::UpdateMuzzleFlash()
+{
+	const bool bFlash = Weapon->GetTimeSinceLastShot() < MuzzleFlashTime;
+	MuzzleFlash->SetVisibility(bFlash);
+	MuzzleLight->SetVisibility(bFlash);
+	if (bFlash)
+	{
+		// A different size and spin each frame so rapid fire flickers.
+		const float Size = FMath::FRandRange(0.8f, 1.3f);
+		MuzzleFlash->SetRelativeRotation(FRotator(0.f, FMath::FRandRange(0.f, 360.f), 0.f));
+		MuzzleFlash->SetRelativeScale3D(FVector(0.14f, 0.14f, 0.24f) * Size);
+	}
+}
+
 void AJavelinCharacter::HandleOverheated()
 {
 	GetJavelinMovement()->StopFlightOrHover();
@@ -487,6 +622,8 @@ void AJavelinCharacter::HandleOverheated()
 void AJavelinCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	UpdateCombatFacing();
+	UpdateMuzzleFlash();
 	UpdateCamera(DeltaSeconds);
 	UpdateVisuals(DeltaSeconds);
 }
@@ -515,10 +652,18 @@ void AJavelinCharacter::UpdateCamera(float DeltaSeconds)
 		break;
 	}
 
-	CameraBoom->TargetArmLength = FMath::FInterpTo(CameraBoom->TargetArmLength, Target->ArmLength, DeltaSeconds, CameraBlendSpeed);
-	CameraBoom->SocketOffset = FMath::VInterpTo(CameraBoom->SocketOffset, Target->SocketOffset, DeltaSeconds, CameraBlendSpeed);
-	CameraBoom->CameraLagSpeed = FMath::FInterpTo(CameraBoom->CameraLagSpeed, Target->LagSpeed, DeltaSeconds, CameraBlendSpeed);
-	FollowCamera->SetFieldOfView(FMath::FInterpTo(FollowCamera->FieldOfView, Target->FieldOfView + ExtraFOV, DeltaSeconds, CameraBlendSpeed));
+	float BlendSpeed = CameraBlendSpeed;
+	if (Weapon->IsAiming())
+	{
+		Target = &AimCamera;
+		ExtraFOV = 0.f;
+		BlendSpeed = AimCameraBlendSpeed;
+	}
+
+	CameraBoom->TargetArmLength = FMath::FInterpTo(CameraBoom->TargetArmLength, Target->ArmLength, DeltaSeconds, BlendSpeed);
+	CameraBoom->SocketOffset = FMath::VInterpTo(CameraBoom->SocketOffset, Target->SocketOffset, DeltaSeconds, BlendSpeed);
+	CameraBoom->CameraLagSpeed = FMath::FInterpTo(CameraBoom->CameraLagSpeed, Target->LagSpeed, DeltaSeconds, BlendSpeed);
+	FollowCamera->SetFieldOfView(FMath::FInterpTo(FollowCamera->FieldOfView, Target->FieldOfView + ExtraFOV, DeltaSeconds, BlendSpeed));
 }
 
 void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
@@ -666,6 +811,26 @@ FJavelinSuitPose AJavelinCharacter::ComputeTargetPose(float DeltaSeconds)
 			}
 		}
 		break;
+	}
+
+	if (IsInCombatStance())
+	{
+		// Gun arm points where the camera looks, undoing the torso lean; the left hand comes up to steady it.
+		const float AimPitch = FMath::Clamp(FRotator::NormalizeAxis(GetControlRotation().Pitch), -70.f, 70.f) - Pose.TorsoPitch;
+		Pose.ShoulderSpread = 4.f;
+		Pose.ShoulderPitch[1] = 90.f + AimPitch;
+		Pose.ElbowBend[1] = 2.f;
+		Pose.ShoulderPitch[0] = 60.f + AimPitch;
+		Pose.ElbowBend[0] = 45.f;
+	}
+	else if (Weapon->IsReloading() && !JavelinMovement->IsInFlight())
+	{
+		// Gun tipped up against the chest while the left hand swaps the magazine.
+		const float Fumble = 6.f * FMath::Sin(AnimTime * 14.f);
+		Pose.ShoulderPitch[1] = 30.f;
+		Pose.ElbowBend[1] = 85.f;
+		Pose.ShoulderPitch[0] = 45.f + Fumble;
+		Pose.ElbowBend[0] = 75.f;
 	}
 	return Pose;
 }
