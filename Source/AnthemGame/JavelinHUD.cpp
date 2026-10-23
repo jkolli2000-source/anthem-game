@@ -1,9 +1,12 @@
 #include "JavelinHUD.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
+#include "EnemyEncounter.h"
 #include "JavelinCharacter.h"
+#include "JavelinEnemy.h"
 #include "JavelinHeatComponent.h"
 #include "JavelinMovementComponent.h"
+#include "JavelinSuitHealthComponent.h"
 #include "JavelinWeaponComponent.h"
 #include "Camera/PlayerCameraManager.h"
 #include "EngineUtils.h"
@@ -16,6 +19,14 @@ namespace
 	const FLinearColor KillColor(1.f, 0.2f, 0.15f);
 	constexpr float HitMarkerTime = 0.2f;
 	constexpr float HealthBarShowTime = 4.f;
+
+	const FLinearColor ShieldColor(0.25f, 0.7f, 1.f);
+	const FLinearColor ArmorColor(1.f, 0.62f, 0.2f);
+	const FLinearColor HealColor(0.2f, 1.f, 0.35f);
+	const FLinearColor EnemyColor(1.f, 0.22f, 0.15f);
+
+	/** Enemy health bars only show within this distance. */
+	constexpr float EnemyMarkerRange = 9000.f;
 }
 
 void AJavelinHUD::DrawCenteredText(const FString& Text, const FLinearColor& Color, float CenterX, float Y, float Scale)
@@ -43,9 +54,19 @@ void AJavelinHUD::DrawHUD()
 	const float Time = GetWorld()->GetTimeSeconds();
 
 	const UJavelinWeaponComponent* Weapon = Javelin->GetWeapon();
+	DrawDamageFeedback(Javelin, CenterX, CenterY);
 	DrawWorldMarkers(Weapon);
-	DrawCrosshair(Javelin, CenterX, CenterY);
+	if (Javelin->IsSuitDown())
+	{
+		DrawSuitDown(Javelin, CenterX, CenterY);
+	}
+	else
+	{
+		DrawCrosshair(Javelin, CenterX, CenterY);
+	}
 	DrawWeaponInfo(Weapon);
+	DrawSuitStatus(Javelin);
+	DrawEncounterInfo(Javelin, CenterX);
 
 	// Heat bar under the crosshair area. Green when cool, red near overheating.
 	const float BarWidth = 420.f;
@@ -112,6 +133,8 @@ void AJavelinHUD::DrawHUD()
 			TEXT("Left mouse  fire     Right mouse  aim     R  reload"),
 			TEXT("Guns are stowed while flying: press Space to hover and shoot"),
 			TEXT("In flight: W boost, S slow, dive steeply or skim water to cool"),
+			TEXT("Enemy camp: follow the red marker. Aim for glowing weak spots"),
+			TEXT("Green orbs repair armor, white orbs give ammo. Shields recharge"),
 		};
 		float Y = 20.f;
 		for (const TCHAR* Line : Lines)
@@ -257,6 +280,24 @@ void AJavelinHUD::DrawWorldMarkers(const UJavelinWeaponComponent* Weapon)
 		DrawRect(KillColor, Screen.X - Width * 0.5f, Screen.Y, Width * Target->GetHealthPercent(), 5.f);
 	}
 
+	// Health bars and names over enemies that are fighting you or that you've just shot.
+	const APawn* Pawn = GetOwningPawn();
+	for (TActorIterator<AJavelinEnemy> It(GetWorld()); It; ++It)
+	{
+		const AJavelinEnemy* Enemy = *It;
+		FVector2D Screen;
+		const bool bShow = Enemy->IsEngaged() || Enemy->GetTimeSinceHit() < HealthBarShowTime;
+		if (!Enemy->IsAlive() || !bShow || !Pawn || FVector::Dist(Pawn->GetActorLocation(), Enemy->GetActorLocation()) > EnemyMarkerRange
+			|| !ProjectToScreen(Enemy->GetHealthBarLocation(), Screen))
+		{
+			continue;
+		}
+		const float Width = 80.f;
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.6f), Screen.X - Width * 0.5f - 2.f, Screen.Y - 2.f, Width + 4.f, 10.f);
+		DrawRect(EnemyColor, Screen.X - Width * 0.5f, Screen.Y, Width * Enemy->GetHealthPercent(), 6.f);
+		DrawCenteredText(Enemy->GetEnemyName().ToString(), FLinearColor(1.f, 0.5f, 0.45f, 0.9f), Screen.X, Screen.Y - 18.f, 0.7f);
+	}
+
 	// Damage numbers rise and fade. Weak spot hits are bigger and orange.
 	const float Now = GetWorld()->GetTimeSeconds();
 	for (const FJavelinDamageNumber& Number : Weapon->GetDamageNumbers())
@@ -272,4 +313,163 @@ void AJavelinHUD::DrawWorldMarkers(const UJavelinWeaponComponent* Weapon)
 		const float Scale = Number.bWeakSpot ? 1.4f : 1.f;
 		DrawCenteredText(FString::FromInt(FMath::RoundToInt(Number.Amount)), Color, Screen.X, Screen.Y - 20.f - Age * 50.f, Scale);
 	}
+}
+
+void AJavelinHUD::DrawSuitStatus(const AJavelinCharacter* Javelin)
+{
+	// Shields over armor in the bottom left, Anthem style.
+	const UJavelinSuitHealthComponent* Health = Javelin->GetSuitHealth();
+	const float Time = GetWorld()->GetTimeSeconds();
+	const float Left = 40.f;
+	const float Width = 300.f;
+	const float ArmorY = Canvas->ClipY - 70.f;
+	const float ShieldY = ArmorY - 22.f;
+	UFont* SmallFont = GEngine->GetSmallFont();
+
+	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.55f), Left - 3.f, ShieldY - 3.f, Width + 6.f, 44.f);
+
+	// Shields: flash white when they break, pulse while recharging.
+	FLinearColor Shield = ShieldColor;
+	if (Health->IsRegeneratingShields())
+	{
+		Shield.A = 0.7f + 0.3f * FMath::Sin(Time * 8.f);
+	}
+	const float SinceBroke = Health->GetTimeSinceShieldsBroke();
+	if (SinceBroke < 0.4f)
+	{
+		Shield = FLinearColor::LerpUsingHSV(FLinearColor::White, ShieldColor, SinceBroke / 0.4f);
+		DrawRect(FLinearColor(1.f, 1.f, 1.f, 0.5f * (1.f - SinceBroke / 0.4f)), Left, ShieldY, Width, 14.f);
+	}
+	DrawRect(Shield, Left, ShieldY, Width * Health->GetShieldPercent(), 14.f);
+
+	// Armor: green flash when repaired, red pulse when nearly gone.
+	FLinearColor Armor = ArmorColor;
+	const float ArmorPercent = Health->GetArmorPercent();
+	if (ArmorPercent < 0.3f)
+	{
+		Armor = FLinearColor::LerpUsingHSV(EnemyColor, FLinearColor::White, 0.25f + 0.25f * FMath::Sin(Time * 10.f));
+	}
+	const float SinceRepair = Health->GetTimeSinceArmorRepaired();
+	if (SinceRepair < 0.6f)
+	{
+		Armor = FLinearColor::LerpUsingHSV(HealColor, Armor, SinceRepair / 0.6f);
+	}
+	DrawRect(Armor, Left, ArmorY, Width * ArmorPercent, 18.f);
+
+	const FString Label = FString::Printf(TEXT("SHIELDS %d     ARMOR %d"), FMath::CeilToInt(Health->GetShields()), FMath::CeilToInt(Health->GetArmor()));
+	DrawText(Label, FLinearColor::White, Left, ArmorY + 24.f, SmallFont);
+
+	if (Health->GetShields() <= 0.f && !Health->IsDown())
+	{
+		DrawText(TEXT("SHIELDS DOWN - take cover"), ShieldColor, Left, ShieldY - 20.f, SmallFont);
+	}
+	else if (Health->IsRegeneratingShields())
+	{
+		DrawText(TEXT("RECHARGING"), ShieldColor, Left, ShieldY - 20.f, SmallFont);
+	}
+}
+
+void AJavelinHUD::DrawDamageFeedback(const AJavelinCharacter* Javelin, float CenterX, float CenterY)
+{
+	const UJavelinSuitHealthComponent* Health = Javelin->GetSuitHealth();
+	const float Time = GetWorld()->GetTimeSeconds();
+
+	// Red glow around the screen edges after a hit; brighter when it's eating armor, and steady while armor is low.
+	const float SinceDamage = Health->GetTimeSinceDamage();
+	float Edge = SinceDamage < 0.5f ? (1.f - SinceDamage / 0.5f) * (Health->GetShields() > 0.f ? 0.3f : 0.6f) : 0.f;
+	if (Health->GetArmorPercent() < 0.3f && !Health->IsDown())
+	{
+		Edge = FMath::Max(Edge, 0.2f + 0.08f * FMath::Sin(Time * 5.f));
+	}
+	if (Edge > 0.f)
+	{
+		// Bands that fade toward the middle fake a soft gradient.
+		const float BandSize = 14.f;
+		for (int32 Band = 0; Band < 6; ++Band)
+		{
+			const float Inset = Band * BandSize;
+			const FLinearColor Color(0.9f, 0.05f, 0.02f, Edge * (1.f - Band / 6.f) * 0.5f);
+			DrawRect(Color, Inset, Inset, Canvas->ClipX - Inset * 2.f, BandSize);
+			DrawRect(Color, Inset, Canvas->ClipY - Inset - BandSize, Canvas->ClipX - Inset * 2.f, BandSize);
+			DrawRect(Color, Inset, Inset + BandSize, BandSize, Canvas->ClipY - (Inset + BandSize) * 2.f);
+			DrawRect(Color, Canvas->ClipX - Inset - BandSize, Inset + BandSize, BandSize, Canvas->ClipY - (Inset + BandSize) * 2.f);
+		}
+	}
+
+	// Arcs around the crosshair pointing toward whoever shot you.
+	const APlayerCameraManager* Camera = PlayerOwner ? PlayerOwner->PlayerCameraManager.Get() : nullptr;
+	if (!Camera)
+	{
+		return;
+	}
+	const float CameraYaw = Camera->GetCameraRotation().Yaw;
+	const float Radius = 120.f;
+	for (const FJavelinDamageIndicator& Indicator : Health->GetDamageIndicators())
+	{
+		const FVector ToSource = Indicator.SourceLocation - Javelin->GetActorLocation();
+		const float Angle = FMath::DegreesToRadians(FRotator::NormalizeAxis(ToSource.Rotation().Yaw - CameraYaw));
+		const float Alpha = 1.f - (Time - Indicator.Time) / UJavelinSuitHealthComponent::DamageIndicatorLifetime;
+		const FLinearColor Color(1.f, 0.15f, 0.08f, FMath::Clamp(Alpha, 0.f, 1.f));
+
+		// Straight ahead is up the screen, to the right is right.
+		const float HalfArc = FMath::DegreesToRadians(14.f);
+		const int32 Segments = 5;
+		for (int32 Index = 0; Index < Segments; ++Index)
+		{
+			const float A = Angle - HalfArc + 2.f * HalfArc * Index / Segments;
+			const float B = Angle - HalfArc + 2.f * HalfArc * (Index + 1) / Segments;
+			DrawLine(CenterX + FMath::Sin(A) * Radius, CenterY - FMath::Cos(A) * Radius,
+				CenterX + FMath::Sin(B) * Radius, CenterY - FMath::Cos(B) * Radius, Color, 5.f);
+		}
+		// A notch on the outside of the arc's middle makes it read as an arrow.
+		DrawLine(CenterX + FMath::Sin(Angle) * Radius, CenterY - FMath::Cos(Angle) * Radius,
+			CenterX + FMath::Sin(Angle) * (Radius + 14.f), CenterY - FMath::Cos(Angle) * (Radius + 14.f), Color, 5.f);
+	}
+}
+
+void AJavelinHUD::DrawEncounterInfo(const AJavelinCharacter* Javelin, float CenterX)
+{
+	TActorIterator<AEnemyEncounter> It(GetWorld());
+	if (!It)
+	{
+		return;
+	}
+	const AEnemyEncounter* Encounter = *It;
+
+	// Wave status at the top of the screen.
+	FString Status;
+	FLinearColor StatusColor = FLinearColor::White;
+	const float UntilNext = Encounter->GetTimeUntilNextWave();
+	if (UntilNext >= 0.f)
+	{
+		Status = FString::Printf(TEXT("CAMP CLEARED - wave %d incoming in %d"), Encounter->GetWave() + 1, FMath::CeilToInt(UntilNext));
+		StatusColor = HealColor;
+	}
+	else
+	{
+		Status = FString::Printf(TEXT("ENEMY CAMP - WAVE %d - %d HOSTILES"), Encounter->GetWave(), Encounter->GetEnemiesRemaining());
+		StatusColor = Encounter->IsInCombat() ? EnemyColor : FLinearColor(1.f, 0.8f, 0.7f);
+	}
+	DrawCenteredText(Status, StatusColor, CenterX, 20.f, 1.1f);
+
+	// A waypoint over the camp while you're away from it.
+	const FVector CampLocation = Encounter->GetActorLocation();
+	const float Distance = FVector::Dist2D(Javelin->GetActorLocation(), CampLocation);
+	FVector2D Screen;
+	if (Distance > Encounter->CampRadius && ProjectToScreen(CampLocation + FVector(0.f, 0.f, 1500.f), Screen))
+	{
+		const float Size = 10.f;
+		DrawLine(Screen.X, Screen.Y - Size, Screen.X + Size, Screen.Y, EnemyColor, 3.f);
+		DrawLine(Screen.X + Size, Screen.Y, Screen.X, Screen.Y + Size, EnemyColor, 3.f);
+		DrawLine(Screen.X, Screen.Y + Size, Screen.X - Size, Screen.Y, EnemyColor, 3.f);
+		DrawLine(Screen.X - Size, Screen.Y, Screen.X, Screen.Y - Size, EnemyColor, 3.f);
+		DrawCenteredText(FString::Printf(TEXT("ENEMY CAMP  %d m"), FMath::RoundToInt(Distance / 100.f)), EnemyColor, Screen.X, Screen.Y + 14.f, 0.8f);
+	}
+}
+
+void AJavelinHUD::DrawSuitDown(const AJavelinCharacter* Javelin, float CenterX, float CenterY)
+{
+	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
+	DrawCenteredText(TEXT("SUIT DOWN"), EnemyColor, CenterX, CenterY - 50.f, 2.5f);
+	DrawCenteredText(FString::Printf(TEXT("Rebooting in %d..."), FMath::CeilToInt(Javelin->GetTimeUntilReboot())), FLinearColor::White, CenterX, CenterY + 10.f, 1.2f);
 }

@@ -3,6 +3,7 @@
 #include "GameFramework/Controller.h"
 #include "GameFramework/DamageType.h"
 #include "JavelinCharacter.h"
+#include "JavelinEnemy.h"
 #include "Kismet/GameplayStatics.h"
 #include "ShootingTarget.h"
 #include "ShotEffect.h"
@@ -10,6 +11,20 @@
 namespace
 {
 	const FName WeakSpotTag(TEXT("WeakSpot"));
+
+	/** Whether a hit actor counts as a living target, so a hit that drops it to zero shows as a kill. */
+	bool IsLivingTarget(const AActor* Actor)
+	{
+		if (const AShootingTarget* Target = Cast<AShootingTarget>(Actor))
+		{
+			return Target->IsAlive();
+		}
+		if (const AJavelinEnemy* Enemy = Cast<AJavelinEnemy>(Actor))
+		{
+			return Enemy->IsAlive();
+		}
+		return false;
+	}
 }
 
 UJavelinWeaponComponent::UJavelinWeaponComponent()
@@ -132,14 +147,13 @@ void UJavelinWeaponComponent::FireShot()
 		const bool bWeakSpot = MuzzleHit.GetComponent() && MuzzleHit.GetComponent()->ComponentHasTag(WeakSpotTag);
 		const float ShotDamage = Damage * (bWeakSpot ? WeakSpotMultiplier : 1.f);
 
-		const AShootingTarget* Target = Cast<AShootingTarget>(HitActor);
-		const bool bWasAlive = !Target || Target->IsAlive();
+		const bool bWasAlive = IsLivingTarget(HitActor);
 		const float Dealt = UGameplayStatics::ApplyPointDamage(HitActor, ShotDamage, ShotDirection, MuzzleHit, Controller, Pawn, UDamageType::StaticClass());
 		if (Dealt > 0.f)
 		{
 			LastHitTime = LastShotTime;
 			bLastHitWeakSpot = bWeakSpot;
-			bLastHitKill = bWasAlive && Target && !Target->IsAlive();
+			bLastHitKill = bWasAlive && !IsLivingTarget(HitActor);
 
 			FJavelinDamageNumber& Number = DamageNumbers.AddDefaulted_GetRef();
 			Number.Location = MuzzleHit.ImpactPoint;
@@ -192,6 +206,16 @@ bool UJavelinWeaponComponent::RefillAmmo()
 	Ammo = MagazineSize;
 	ReserveAmmo = MaxReserveAmmo;
 	bReloading = false;
+	return true;
+}
+
+bool UJavelinWeaponComponent::AddReserveAmmo(int32 Rounds)
+{
+	if (ReserveAmmo >= MaxReserveAmmo || Rounds <= 0)
+	{
+		return false;
+	}
+	ReserveAmmo = FMath::Min(MaxReserveAmmo, ReserveAmmo + Rounds);
 	return true;
 }
 
