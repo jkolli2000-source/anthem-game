@@ -1,11 +1,13 @@
 #include "JavelinCharacter.h"
 #include "JavelinHeatComponent.h"
 #include "JavelinMovementComponent.h"
+#include "JavelinSuitHealthComponent.h"
 #include "JavelinWeaponComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/DamageEvents.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/StaticMesh.h"
 #include "EnhancedInputComponent.h"
@@ -17,6 +19,7 @@
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -91,6 +94,7 @@ AJavelinCharacter::AJavelinCharacter(const FObjectInitializer& ObjectInitializer
 
 	Heat = CreateDefaultSubobject<UJavelinHeatComponent>(TEXT("Heat"));
 	Weapon = CreateDefaultSubobject<UJavelinWeaponComponent>(TEXT("Weapon"));
+	SuitHealth = CreateDefaultSubobject<UJavelinSuitHealthComponent>(TEXT("SuitHealth"));
 
 	BuildSuit();
 }
@@ -293,6 +297,9 @@ void AJavelinCharacter::BeginPlay()
 	}
 
 	Heat->OnOverheated.AddDynamic(this, &AJavelinCharacter::HandleOverheated);
+	SuitHealth->OnSuitDown.AddDynamic(this, &AJavelinCharacter::HandleSuitDown);
+	StartLocation = GetActorLocation();
+	StartRotation = GetActorRotation();
 	Weapon->SetMuzzle(Muzzle);
 	MuzzleLight->SetLightColor(MuzzleFlashColor);
 	LastYaw = GetActorRotation().Yaw;
@@ -444,6 +451,10 @@ void AJavelinCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 
 void AJavelinCharacter::Move(const FInputActionValue& Value)
 {
+	if (IsSuitDown())
+	{
+		return;
+	}
 	const FVector2D Axis = Value.Get<FVector2D>();
 	UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
 
@@ -490,6 +501,10 @@ bool AJavelinCharacter::TryStartHover()
 
 void AJavelinCharacter::OnJumpPressed()
 {
+	if (IsSuitDown())
+	{
+		return;
+	}
 	UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
 	switch (JavelinMovement->GetJavelinMode())
 	{
@@ -519,6 +534,10 @@ void AJavelinCharacter::OnJumpReleased()
 
 void AJavelinCharacter::OnThrustPressed()
 {
+	if (IsSuitDown())
+	{
+		return;
+	}
 	UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
 	if (JavelinMovement->IsInFlight())
 	{
@@ -541,6 +560,10 @@ void AJavelinCharacter::OnThrustReleased()
 
 void AJavelinCharacter::OnLaunchPressed()
 {
+	if (IsSuitDown())
+	{
+		return;
+	}
 	if (!GetJavelinMovement()->IsInFlight())
 	{
 		TryStartFlight();
@@ -549,6 +572,10 @@ void AJavelinCharacter::OnLaunchPressed()
 
 void AJavelinCharacter::OnFirePressed()
 {
+	if (IsSuitDown())
+	{
+		return;
+	}
 	// Shooting stops a sprint. Holding the trigger while flying starts firing as soon as you hover.
 	GetJavelinMovement()->SetSprinting(false);
 	Weapon->SetTriggerHeld(true);
@@ -561,6 +588,10 @@ void AJavelinCharacter::OnFireReleased()
 
 void AJavelinCharacter::OnAimPressed()
 {
+	if (IsSuitDown())
+	{
+		return;
+	}
 	GetJavelinMovement()->SetSprinting(false);
 	Weapon->SetWantsToAim(true);
 }
@@ -572,12 +603,16 @@ void AJavelinCharacter::OnAimReleased()
 
 void AJavelinCharacter::OnReloadPressed()
 {
+	if (IsSuitDown())
+	{
+		return;
+	}
 	Weapon->StartReload();
 }
 
 bool AJavelinCharacter::CanFireWeapon() const
 {
-	return !GetJavelinMovement()->IsInFlight();
+	return !GetJavelinMovement()->IsInFlight() && !IsSuitDown();
 }
 
 bool AJavelinCharacter::CanAimWeapon() const
@@ -617,6 +652,61 @@ void AJavelinCharacter::UpdateMuzzleFlash()
 void AJavelinCharacter::HandleOverheated()
 {
 	GetJavelinMovement()->StopFlightOrHover();
+}
+
+bool AJavelinCharacter::IsSuitDown() const
+{
+	return SuitHealth->IsDown();
+}
+
+float AJavelinCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
+{
+	const float Incoming = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
+	if (Incoming <= 0.f)
+	{
+		return 0.f;
+	}
+
+	// Remember where the hit came from so the HUD can point at it.
+	FVector Source = DamageCauser ? DamageCauser->GetActorLocation() : GetActorLocation();
+	if (DamageEvent.IsOfType(FPointDamageEvent::ClassID))
+	{
+		const FPointDamageEvent& PointDamage = static_cast<const FPointDamageEvent&>(DamageEvent);
+		Source = GetActorLocation() - PointDamage.ShotDirection * 1000.f;
+	}
+	return SuitHealth->ApplyDamage(Incoming, Source);
+}
+
+void AJavelinCharacter::HandleSuitDown()
+{
+	// Drop out of the air and let go of everything until the suit reboots.
+	UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
+	JavelinMovement->StopFlightOrHover();
+	JavelinMovement->SetSprinting(false);
+	JavelinMovement->SetFlightInput(FVector2D::ZeroVector);
+	Weapon->SetTriggerHeld(false);
+	Weapon->SetWantsToAim(false);
+	GetWorldTimerManager().SetTimer(RebootTimer, this, &AJavelinCharacter::Reboot, FMath::Max(RebootTime, 0.1f));
+}
+
+void AJavelinCharacter::Reboot()
+{
+	if (bRebootAtStart)
+	{
+		SetActorLocationAndRotation(StartLocation, StartRotation, false, nullptr, ETeleportType::TeleportPhysics);
+		GetJavelinMovement()->StopMovementImmediately();
+		if (Controller)
+		{
+			Controller->SetControlRotation(StartRotation);
+		}
+	}
+	SuitHealth->Restore();
+	Weapon->RefillAmmo();
+}
+
+float AJavelinCharacter::GetTimeUntilReboot() const
+{
+	return GetWorldTimerManager().IsTimerActive(RebootTimer) ? GetWorldTimerManager().GetTimerRemaining(RebootTimer) : 0.f;
 }
 
 void AJavelinCharacter::Tick(float DeltaSeconds)
@@ -733,6 +823,24 @@ FJavelinSuitPose AJavelinCharacter::ComputeTargetPose(float DeltaSeconds)
 
 	// Angles in degrees. Positive pitch swings a limb forward; negative knee bend folds the shin back.
 	FJavelinSuitPose Pose;
+	if (IsSuitDown())
+	{
+		// Slumped on its knees, head down and arms hanging, jets dead.
+		Pose.TorsoPitch = -30.f;
+		Pose.HeadPitch = -25.f;
+		Pose.ShoulderSpread = 10.f;
+		Pose.LegSpread = 8.f;
+		Pose.BodyBob = -40.f;
+		for (int32 Side = 0; Side < 2; ++Side)
+		{
+			Pose.ShoulderPitch[Side] = 15.f;
+			Pose.ElbowBend[Side] = 20.f;
+			Pose.HipPitch[Side] = 70.f;
+			Pose.KneeBend[Side] = -110.f;
+		}
+		return Pose;
+	}
+
 	switch (JavelinMovement->GetJavelinMode())
 	{
 	case EJavelinMoveMode::Flight:
