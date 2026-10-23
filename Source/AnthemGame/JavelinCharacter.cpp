@@ -37,6 +37,14 @@ namespace
 		}
 	}
 
+	// Component tags that say how BeginPlay paints each suit part.
+	const FName PaintPrimary(TEXT("Paint.Primary"));
+	const FName PaintSecondary(TEXT("Paint.Secondary"));
+	const FName PaintTrim(TEXT("Paint.Trim"));
+	const FName PaintFrame(TEXT("Paint.Frame"));
+	const FName PaintAccent(TEXT("Paint.Accent"));
+	const FName PaintGlow(TEXT("Paint.Glow"));
+
 	const FLinearColor ThrusterIdleColor(0.2f, 0.2f, 0.22f);
 	const FLinearColor ThrusterCoolColor(0.1f, 0.7f, 1.f);
 	const FLinearColor ThrusterHotColor(1.f, 0.15f, 0.05f);
@@ -75,31 +83,125 @@ AJavelinCharacter::AJavelinCharacter(const FObjectInitializer& ObjectInitializer
 
 	Heat = CreateDefaultSubobject<UJavelinHeatComponent>(TEXT("Heat"));
 
-	// Placeholder suit built from the engine's basic shapes, so the project needs no art assets yet.
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	BuildSuit();
+}
+
+USceneComponent* AJavelinCharacter::CreatePivot(FName Name, USceneComponent* Parent, const FVector& Location)
+{
+	USceneComponent* Pivot = CreateDefaultSubobject<USceneComponent>(Name);
+	Pivot->SetupAttachment(Parent);
+	Pivot->SetRelativeLocation(Location);
+	return Pivot;
+}
+
+UStaticMeshComponent* AJavelinCharacter::CreatePart(FName Name, USceneComponent* Parent, UStaticMesh* PartMesh, const FVector& Location, const FVector& Scale, FName Paint, const FRotator& Rotation)
+{
+	UStaticMeshComponent* Part = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+	Part->SetupAttachment(Parent);
+	Part->SetStaticMesh(PartMesh);
+	Part->SetRelativeLocationAndRotation(Location, Rotation);
+	Part->SetRelativeScale3D(Scale);
+	Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Part->SetGenerateOverlapEvents(false);
+	Part->ComponentTags.Add(Paint);
+	return Part;
+}
+
+USceneComponent* AJavelinCharacter::CreateFlame(FName Name, USceneComponent* Parent, UStaticMesh* ConeMesh, const FVector& Location, float Width)
+{
+	// The pivot sits at the nozzle; scaling its Z stretches the flame away from the nozzle.
+	USceneComponent* Pivot = CreatePivot(Name, Parent, Location);
+	UStaticMeshComponent* Cone = CreatePart(FName(*(Name.ToString() + TEXT("Cone"))), Pivot, ConeMesh,
+		FVector(0.f, 0.f, -50.f), FVector(Width, Width, 1.f), PaintGlow, FRotator(180.f, 0.f, 0.f));
+	Cone->SetCastShadow(false);
+	Pivot->SetVisibility(false, true);
+	return Pivot;
+}
+
+void AJavelinCharacter::BuildSuit()
+{
+	// A Ranger-style exosuit built from the engine's basic shapes, so the project needs no art assets yet.
+	// Basic shapes are 100 units across and centered on their pivot. The capsule's feet are at Z = -96.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderFinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereFinder(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> ConeFinder(TEXT("/Engine/BasicShapes/Cone.Cone"));
+	UStaticMesh* Cube = CubeFinder.Object;
+	UStaticMesh* Cylinder = CylinderFinder.Object;
+	UStaticMesh* Sphere = SphereFinder.Object;
+	UStaticMesh* Cone = ConeFinder.Object;
 
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	VisualRoot->SetupAttachment(RootComponent);
 
-	TorsoMesh = CreateVisualPart(TEXT("Torso"), CubeMesh.Object, FVector(0.f, 0.f, 25.f), FVector(0.55f, 0.75f, 0.7f));
-	LegsMesh = CreateVisualPart(TEXT("Legs"), CylinderMesh.Object, FVector(0.f, 0.f, -50.f), FVector(0.4f, 0.6f, 0.85f));
-	HeadMesh = CreateVisualPart(TEXT("Head"), SphereMesh.Object, FVector(0.f, 0.f, 78.f), FVector(0.35f));
-	VisorMesh = CreateVisualPart(TEXT("Visor"), CubeMesh.Object, FVector(15.f, 0.f, 80.f), FVector(0.1f, 0.25f, 0.08f));
-	ThrusterMesh = CreateVisualPart(TEXT("Thruster"), CubeMesh.Object, FVector(-42.f, 0.f, 30.f), FVector(0.3f, 0.6f, 0.55f));
-}
+	// Pelvis
+	CreatePart(TEXT("Pelvis"), VisualRoot, Cube, FVector(0.f, 0.f, -10.f), FVector(0.34f, 0.5f, 0.22f), PaintFrame);
+	CreatePart(TEXT("Codpiece"), VisualRoot, Cube, FVector(14.f, 0.f, -14.f), FVector(0.1f, 0.24f, 0.2f), PaintPrimary);
 
-UStaticMeshComponent* AJavelinCharacter::CreateVisualPart(FName Name, UStaticMesh* PartMesh, const FVector& Location, const FVector& Scale)
-{
-	UStaticMeshComponent* Part = CreateDefaultSubobject<UStaticMeshComponent>(Name);
-	Part->SetupAttachment(VisualRoot);
-	Part->SetStaticMesh(PartMesh);
-	Part->SetRelativeLocation(Location);
-	Part->SetRelativeScale3D(Scale);
-	Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Part->SetGenerateOverlapEvents(false);
-	return Part;
+	// Torso, leaning around the waist
+	TorsoPivot = CreatePivot(TEXT("TorsoPivot"), VisualRoot, FVector(0.f, 0.f, 2.f));
+	CreatePart(TEXT("Abdomen"), TorsoPivot, Cube, FVector(0.f, 0.f, 10.f), FVector(0.32f, 0.44f, 0.26f), PaintFrame);
+	CreatePart(TEXT("Chest"), TorsoPivot, Cube, FVector(2.f, 0.f, 42.f), FVector(0.5f, 0.78f, 0.46f), PaintPrimary);
+	CreatePart(TEXT("ChestPlate"), TorsoPivot, Cube, FVector(24.f, 0.f, 44.f), FVector(0.08f, 0.62f, 0.32f), PaintSecondary, FRotator(-8.f, 0.f, 0.f));
+	CreatePart(TEXT("ChestCore"), TorsoPivot, Cylinder, FVector(29.f, 0.f, 46.f), FVector(0.14f, 0.14f, 0.04f), PaintAccent, FRotator(90.f, 0.f, 0.f));
+	CreatePart(TEXT("Collar"), TorsoPivot, Cube, FVector(-2.f, 0.f, 66.f), FVector(0.42f, 0.5f, 0.08f), PaintTrim);
+
+	// Jet pack with two nozzles pointing down the back
+	CreatePart(TEXT("JetPack"), TorsoPivot, Cube, FVector(-30.f, 0.f, 44.f), FVector(0.24f, 0.62f, 0.5f), PaintSecondary);
+	CreatePart(TEXT("JetPackSpine"), TorsoPivot, Cube, FVector(-43.f, 0.f, 46.f), FVector(0.06f, 0.14f, 0.42f), PaintTrim);
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		const float Y = Side == 0 ? -20.f : 20.f;
+		const FString Prefix = Side == 0 ? TEXT("Left") : TEXT("Right");
+		CreatePart(*(Prefix + TEXT("Nozzle")), TorsoPivot, Cylinder, FVector(-36.f, Y, 16.f), FVector(0.17f, 0.17f, 0.18f), PaintFrame);
+		CreatePart(*(Prefix + TEXT("NozzleGlow")), TorsoPivot, Cylinder, FVector(-36.f, Y, 6.5f), FVector(0.13f, 0.13f, 0.02f), PaintGlow);
+		BackFlames.Add(CreateFlame(*(Prefix + TEXT("BackFlame")), TorsoPivot, Cone, FVector(-36.f, Y, 6.f), 0.13f));
+	}
+
+	// Helmet
+	HeadPivot = CreatePivot(TEXT("HeadPivot"), TorsoPivot, FVector(4.f, 0.f, 70.f));
+	CreatePart(TEXT("Neck"), HeadPivot, Cylinder, FVector(0.f, 0.f, 2.f), FVector(0.18f, 0.18f, 0.1f), PaintFrame);
+	CreatePart(TEXT("Helmet"), HeadPivot, Sphere, FVector(0.f, 0.f, 16.f), FVector(0.34f, 0.3f, 0.36f), PaintPrimary);
+	CreatePart(TEXT("HelmetCrest"), HeadPivot, Cube, FVector(-2.f, 0.f, 32.f), FVector(0.3f, 0.06f, 0.06f), PaintTrim);
+	CreatePart(TEXT("Faceplate"), HeadPivot, Cube, FVector(13.f, 0.f, 12.f), FVector(0.1f, 0.24f, 0.16f), PaintSecondary);
+	CreatePart(TEXT("Visor"), HeadPivot, Cube, FVector(16.f, 0.f, 19.f), FVector(0.06f, 0.24f, 0.06f), PaintAccent);
+
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		const float S = Side == 0 ? -1.f : 1.f;
+		const FString Prefix = Side == 0 ? TEXT("Left") : TEXT("Right");
+		auto PartName = [&Prefix](const TCHAR* Part) { return FName(*(Prefix + Part)); };
+
+		// Arm: shoulder > elbow > hand
+		USceneComponent* Shoulder = CreatePivot(PartName(TEXT("Shoulder")), TorsoPivot, FVector(0.f, 46.f * S, 56.f));
+		CreatePart(PartName(TEXT("Pauldron")), Shoulder, Sphere, FVector(0.f, 6.f * S, 6.f), FVector(0.42f, 0.36f, 0.32f), PaintPrimary);
+		CreatePart(PartName(TEXT("PauldronTrim")), Shoulder, Cube, FVector(0.f, 12.f * S, 15.f), FVector(0.32f, 0.16f, 0.05f), PaintTrim);
+		CreatePart(PartName(TEXT("UpperArm")), Shoulder, Cylinder, FVector(0.f, 0.f, -22.f), FVector(0.17f, 0.17f, 0.36f), PaintFrame);
+
+		USceneComponent* Elbow = CreatePivot(PartName(TEXT("Elbow")), Shoulder, FVector(0.f, 0.f, -40.f));
+		CreatePart(PartName(TEXT("Forearm")), Elbow, Cube, FVector(2.f, 0.f, -17.f), FVector(0.24f, 0.22f, 0.34f), PaintSecondary);
+		CreatePart(PartName(TEXT("Gauntlet")), Elbow, Cube, FVector(3.f, 9.f * S, -14.f), FVector(0.2f, 0.06f, 0.22f), PaintPrimary);
+		CreatePart(PartName(TEXT("WristGlow")), Elbow, Cylinder, FVector(2.f, 0.f, -35.f), FVector(0.19f, 0.19f, 0.03f), PaintGlow);
+		CreatePart(PartName(TEXT("Hand")), Elbow, Cube, FVector(3.f, 0.f, -43.f), FVector(0.15f, 0.12f, 0.14f), PaintFrame);
+
+		// Leg: hip > knee > foot
+		USceneComponent* Hip = CreatePivot(PartName(TEXT("Hip")), VisualRoot, FVector(0.f, 19.f * S, -14.f));
+		CreatePart(PartName(TEXT("Thigh")), Hip, Cube, FVector(0.f, 0.f, -20.f), FVector(0.26f, 0.24f, 0.4f), PaintPrimary);
+		CreatePart(PartName(TEXT("ThighPlate")), Hip, Cube, FVector(0.f, 13.f * S, -16.f), FVector(0.2f, 0.04f, 0.28f), PaintTrim);
+
+		USceneComponent* Knee = CreatePivot(PartName(TEXT("Knee")), Hip, FVector(0.f, 0.f, -40.f));
+		CreatePart(PartName(TEXT("KneePad")), Knee, Sphere, FVector(12.f, 0.f, 1.f), FVector(0.17f, 0.18f, 0.18f), PaintSecondary);
+		CreatePart(PartName(TEXT("Shin")), Knee, Cube, FVector(0.f, 0.f, -19.f), FVector(0.24f, 0.22f, 0.36f), PaintSecondary);
+		CreatePart(PartName(TEXT("CalfJet")), Knee, Cylinder, FVector(-13.f, 0.f, -22.f), FVector(0.12f, 0.12f, 0.2f), PaintFrame);
+		CreatePart(PartName(TEXT("Foot")), Knee, Cube, FVector(7.f, 0.f, -37.f), FVector(0.34f, 0.2f, 0.1f), PaintFrame);
+		CreatePart(PartName(TEXT("SoleGlow")), Knee, Cylinder, FVector(-2.f, 0.f, -42.f), FVector(0.12f, 0.12f, 0.01f), PaintGlow);
+		FootFlames.Add(CreateFlame(PartName(TEXT("FootFlame")), Knee, Cone, FVector(-2.f, 0.f, -42.5f), 0.11f));
+
+		(Side == 0 ? LeftShoulder : RightShoulder) = Shoulder;
+		(Side == 0 ? LeftElbow : RightElbow) = Elbow;
+		(Side == 0 ? LeftHip : RightHip) = Hip;
+		(Side == 0 ? LeftKnee : RightKnee) = Knee;
+	}
 }
 
 UJavelinMovementComponent* AJavelinCharacter::GetJavelinMovement() const
@@ -111,11 +213,41 @@ void AJavelinCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
-	SetPartColor(TorsoMesh, FLinearColor(0.12f, 0.16f, 0.22f));
-	SetPartColor(LegsMesh, FLinearColor(0.08f, 0.08f, 0.1f));
-	SetPartColor(HeadMesh, FLinearColor(0.18f, 0.2f, 0.24f));
-	SetPartColor(VisorMesh, FLinearColor(0.1f, 0.8f, 1.f));
-	ThrusterMaterial = ThrusterMesh->CreateDynamicMaterialInstance(0);
+	struct FPaintSlot
+	{
+		FName Tag;
+		FLinearColor Color;
+	};
+	const FPaintSlot Paints[] = {
+		{ PaintPrimary, PrimaryColor },
+		{ PaintSecondary, SecondaryColor },
+		{ PaintTrim, TrimColor },
+		{ PaintFrame, FrameColor },
+		{ PaintAccent, AccentColor },
+	};
+
+	TInlineComponentArray<UStaticMeshComponent*> Parts(this);
+	for (UStaticMeshComponent* Part : Parts)
+	{
+		if (Part->ComponentHasTag(PaintGlow))
+		{
+			// One shared material so every thruster glow and flame changes color together.
+			if (!ThrusterMaterial)
+			{
+				ThrusterMaterial = UMaterialInstanceDynamic::Create(Part->GetMaterial(0), this);
+			}
+			Part->SetMaterial(0, ThrusterMaterial);
+			continue;
+		}
+		for (const FPaintSlot& Paint : Paints)
+		{
+			if (Part->ComponentHasTag(Paint.Tag))
+			{
+				SetPartColor(Part, Paint.Color);
+				break;
+			}
+		}
+	}
 
 	Heat->OnOverheated.AddDynamic(this, &AJavelinCharacter::HandleOverheated);
 	LastYaw = GetActorRotation().Yaw;
@@ -413,7 +545,27 @@ void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
 	const FQuat Tilt = FRotator(0.f, 0.f, VisualRoll).Quaternion() * FRotator(VisualPitch, 0.f, 0.f).Quaternion();
 	VisualRoot->SetRelativeRotation(Tilt);
 
-	// Thruster glows blue when active and shifts to red as heat builds.
+	// Limbs blend toward the pose for the current movement state.
+	const FJavelinSuitPose Target = ComputeTargetPose(DeltaSeconds);
+	const float Alpha = FMath::Clamp(DeltaSeconds * PoseBlendSpeed, 0.f, 1.f);
+	auto Blend = [Alpha](float& Current, float Goal) { Current = FMath::Lerp(Current, Goal, Alpha); };
+	Blend(CurrentPose.TorsoPitch, Target.TorsoPitch);
+	Blend(CurrentPose.HeadPitch, Target.HeadPitch);
+	Blend(CurrentPose.ShoulderSpread, Target.ShoulderSpread);
+	Blend(CurrentPose.LegSpread, Target.LegSpread);
+	Blend(CurrentPose.BodyBob, Target.BodyBob);
+	Blend(CurrentPose.BackFlame, Target.BackFlame);
+	Blend(CurrentPose.FootFlame, Target.FootFlame);
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		Blend(CurrentPose.ShoulderPitch[Side], Target.ShoulderPitch[Side]);
+		Blend(CurrentPose.ElbowBend[Side], Target.ElbowBend[Side]);
+		Blend(CurrentPose.HipPitch[Side], Target.HipPitch[Side]);
+		Blend(CurrentPose.KneeBend[Side], Target.KneeBend[Side]);
+	}
+	ApplyPose(CurrentPose);
+
+	// Thrusters glow blue when active and shift to red as heat builds.
 	if (ThrusterMaterial)
 	{
 		FLinearColor Color = ThrusterIdleColor;
@@ -427,4 +579,131 @@ void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
 		}
 		ThrusterMaterial->SetVectorParameterValue(TEXT("Color"), Color);
 	}
+}
+
+FJavelinSuitPose AJavelinCharacter::ComputeTargetPose(float DeltaSeconds)
+{
+	const UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
+	AnimTime += DeltaSeconds;
+
+	// Angles in degrees. Positive pitch swings a limb forward; negative knee bend folds the shin back.
+	FJavelinSuitPose Pose;
+	switch (JavelinMovement->GetJavelinMode())
+	{
+	case EJavelinMoveMode::Flight:
+	{
+		// Superhero pose: arms swept back along the body, legs straight, back jets roaring.
+		const float Boost = FMath::GetMappedRangeValueClamped(
+			FVector2D(JavelinMovement->FlightCruiseSpeed, JavelinMovement->FlightBoostSpeed), FVector2D(0.f, 1.f), GetVelocity().Size());
+		Pose.HeadPitch = 35.f;
+		Pose.ShoulderSpread = 14.f - 8.f * Boost;
+		Pose.LegSpread = 4.f;
+		for (int32 Side = 0; Side < 2; ++Side)
+		{
+			Pose.ShoulderPitch[Side] = -12.f;
+			Pose.ElbowBend[Side] = 8.f;
+			Pose.HipPitch[Side] = -4.f;
+			Pose.KneeBend[Side] = -8.f;
+		}
+		Pose.BackFlame = 1.f + 0.8f * Boost;
+		Pose.FootFlame = 0.4f;
+		break;
+	}
+	case EJavelinMoveMode::Hover:
+		// Legs dangle unevenly, arms out for balance, and the suit bobs on its foot jets.
+		Pose.TorsoPitch = -4.f;
+		Pose.ShoulderSpread = 22.f;
+		Pose.LegSpread = 6.f;
+		Pose.ShoulderPitch[0] = 10.f;
+		Pose.ShoulderPitch[1] = 4.f;
+		Pose.ElbowBend[0] = 35.f;
+		Pose.ElbowBend[1] = 25.f;
+		Pose.HipPitch[0] = 18.f;
+		Pose.HipPitch[1] = -4.f;
+		Pose.KneeBend[0] = -40.f;
+		Pose.KneeBend[1] = -18.f;
+		Pose.BodyBob = 3.f * FMath::Sin(AnimTime * 2.5f);
+		Pose.BackFlame = 0.35f;
+		Pose.FootFlame = 0.9f;
+		break;
+	default:
+		if (JavelinMovement->IsMovingOnGround())
+		{
+			// Walk cycle driven by ground speed, so feet roughly match the distance covered.
+			const float Speed = GetVelocity().Size2D();
+			const float Stride = FMath::Clamp(Speed / FMath::Max(JavelinMovement->MaxWalkSpeed, 1.f), 0.f, 1.4f);
+			WalkPhase = FMath::Fmod(WalkPhase + DeltaSeconds * UE_TWO_PI * Speed / FMath::Max(WalkStrideLength, 1.f), UE_TWO_PI);
+			const float Swing = FMath::Sin(WalkPhase);
+			const float Breath = FMath::Sin(AnimTime * 1.6f);
+
+			Pose.TorsoPitch = -8.f * Stride;
+			Pose.HeadPitch = 6.f * Stride;
+			Pose.ShoulderSpread = 8.f + Breath;
+			Pose.BodyBob = -3.f * Stride * FMath::Abs(FMath::Cos(WalkPhase));
+			for (int32 Side = 0; Side < 2; ++Side)
+			{
+				const float SideSwing = Side == 0 ? Swing : -Swing;
+				const float Lift = FMath::Max(0.f, FMath::Cos(WalkPhase + (Side == 0 ? 0.f : UE_PI)));
+				Pose.HipPitch[Side] = 28.f * Stride * SideSwing;
+				Pose.KneeBend[Side] = -4.f - 45.f * Stride * Lift;
+				Pose.ShoulderPitch[Side] = -22.f * Stride * SideSwing;
+				Pose.ElbowBend[Side] = 15.f + 20.f * Stride + 2.f * Breath;
+			}
+		}
+		else
+		{
+			// Falling: arms flung out, legs braced for landing.
+			Pose.ShoulderSpread = 35.f;
+			Pose.LegSpread = 8.f;
+			Pose.HipPitch[0] = 20.f;
+			Pose.HipPitch[1] = -8.f;
+			Pose.KneeBend[0] = -30.f;
+			Pose.KneeBend[1] = -20.f;
+			for (int32 Side = 0; Side < 2; ++Side)
+			{
+				Pose.ShoulderPitch[Side] = 15.f;
+				Pose.ElbowBend[Side] = 30.f;
+			}
+		}
+		break;
+	}
+	return Pose;
+}
+
+void AJavelinCharacter::ApplyPose(const FJavelinSuitPose& Pose)
+{
+	VisualRoot->SetRelativeLocation(FVector(0.f, 0.f, Pose.BodyBob));
+	TorsoPivot->SetRelativeRotation(FRotator(Pose.TorsoPitch, 0.f, 0.f));
+	HeadPivot->SetRelativeRotation(FRotator(Pose.HeadPitch, 0.f, 0.f));
+
+	USceneComponent* const Shoulders[2] = { LeftShoulder, RightShoulder };
+	USceneComponent* const Elbows[2] = { LeftElbow, RightElbow };
+	USceneComponent* const Hips[2] = { LeftHip, RightHip };
+	USceneComponent* const Knees[2] = { LeftKnee, RightKnee };
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		// Negative roll swings a hanging limb toward +Y (the right side), so mirror it per side to spread outward.
+		const float Outward = Side == 0 ? 1.f : -1.f;
+		Shoulders[Side]->SetRelativeRotation(FRotator(Pose.ShoulderPitch[Side], 0.f, Pose.ShoulderSpread * Outward));
+		Elbows[Side]->SetRelativeRotation(FRotator(Pose.ElbowBend[Side], 0.f, 0.f));
+		Hips[Side]->SetRelativeRotation(FRotator(Pose.HipPitch[Side], 0.f, Pose.LegSpread * Outward));
+		Knees[Side]->SetRelativeRotation(FRotator(Pose.KneeBend[Side], 0.f, 0.f));
+	}
+
+	// Flames flicker and stretch with thrust, and hide when the jets are off.
+	auto UpdateFlames = [this](const TArray<TObjectPtr<USceneComponent>>& Flames, float Length)
+	{
+		for (int32 Index = 0; Index < Flames.Num(); ++Index)
+		{
+			const bool bLit = Length > 0.05f;
+			Flames[Index]->SetVisibility(bLit, true);
+			if (bLit)
+			{
+				const float Flicker = 1.f + 0.15f * FMath::Sin(AnimTime * 38.f + Index * 1.7f);
+				Flames[Index]->SetRelativeScale3D(FVector(1.f, 1.f, 0.6f * Length * Flicker));
+			}
+		}
+	};
+	UpdateFlames(BackFlames, Pose.BackFlame);
+	UpdateFlames(FootFlames, Pose.FootFlame);
 }
