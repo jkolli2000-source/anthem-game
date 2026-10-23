@@ -11,7 +11,9 @@ class UCoolingZoneComponent;
 /**
  * Graybox course for testing flight: a 1 km ground plane, rock pillars of
  * different heights, arches to fly through, a landing tower, and a lake with
- * a waterfall that cool the suit.
+ * a waterfall that cool the suit. Next to the start there is a shooting
+ * range: training dummies, strafing dummies, floating drones to shoot while
+ * hovering, low cover walls and an ammo crate.
  *
  * The game mode spawns one at play time if the level has none. You can also
  * drag one into a level from the Place Actors panel to see and tweak it.
@@ -33,6 +35,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Arena", meta = (ClampMin = "0", ClampMax = "200"))
 	int32 PillarCount = 45;
 
+	/** Spawns the targets and ammo crate when play starts. */
+	UPROPERTY(EditAnywhere, Category = "Arena")
+	bool bSpawnShootingRange = true;
+
 	UPROPERTY(EditAnywhere, Category = "Arena")
 	FLinearColor GroundColor = FLinearColor(0.12f, 0.14f, 0.11f);
 
@@ -43,6 +49,8 @@ public:
 	FLinearColor WaterColor = FLinearColor(0.05f, 0.35f, 0.8f);
 
 protected:
+	virtual void BeginPlay() override;
+
 	UPROPERTY(VisibleAnywhere, Category = "Components")
 	TObjectPtr<UInstancedStaticMeshComponent> Ground;
 
@@ -63,6 +71,7 @@ protected:
 	TObjectPtr<UMaterialInterface> BaseMaterial;
 
 private:
+	void SpawnShootingRange();
 	void SetColor(UInstancedStaticMeshComponent* Component, const FLinearColor& Color);
 
 	/** Adds a box by center and full size in centimeters. */

@@ -2,7 +2,7 @@
 
 A flying exosuit ("javelin") action game inspired by Anthem, built in **Unreal Engine 5** with C++.
 
-**Current milestone: 1, flight feel.** You can walk, sprint, jump, hover and fly a placeholder Ranger suit around a graybox course. Flying builds **heat**; overheat and you drop out of the sky until the suit cools. Water, the waterfall and steep dives cool you down.
+**Current milestone: 1, flight feel.** You can walk, sprint, jump, hover and fly a placeholder Ranger suit around a graybox course. Flying builds **heat**; overheat and you drop out of the sky until the suit cools. Water, the waterfall and steep dives cool you down. You also carry an **assault rifle** with aiming, ammo, reloads and hit effects, and there's a shooting range next to the start.
 
 The full design is in the project's UE5 implementation plan. Characters are placeholder shapes for now; art comes later.
 
@@ -71,6 +71,11 @@ You don't need to place anything. When you press Play, the game spawns your jave
 | Start flying (in the air), stop flying | Left Shift | Click left stick |
 | Take off straight into flight | F | Y |
 | Flight: speed up / slow down | W / S | Left stick up / down |
+| Fire (hold for full auto) | Left mouse | Right trigger |
+| Aim down sights (hold) | Right mouse | Left trigger |
+| Reload | R | X |
+
+You can shoot on the ground, while jumping or falling, and while hovering. Like in Anthem, the gun is stowed while you fly: press **Space** to drop into a hover and shoot.
 
 ### Things to try
 
@@ -78,6 +83,10 @@ You don't need to place anything. When you press Play, the game spawns your jave
 - **Hover:** jump with **Space**, press **Space** again in the air, and look around. Hover heats you up more slowly than flying.
 - **Overheat:** fly without stopping for about 11 seconds. The heat bar turns red, you drop, and you can't fly again until the bar is empty.
 - **Cool down mid-flight:** dive steeply toward the ground, skim low over the blue lake, or fly through the waterfall (the lake and waterfall are about 200 m from the start; look for the tall cliff). The bar shows **COOLING**.
+- **Shooting range:** right in front of the start, beside the landing tower, there are training dummies, dummies that strafe, and floating drones. Shoot the glowing orange head or eye for double damage (orange damage numbers). Destroyed targets come back after a few seconds.
+- **Aim down sights:** hold the right mouse button to zoom over the shoulder and tighten your spread. Long bursts bloom the crosshair; let go briefly to recover accuracy.
+- **Hover and shoot:** jump, press **Space** to hover, and shoot the drones in the air.
+- **Ammo:** a magazine holds 30 rounds and reloads automatically when empty (or press **R**). When your reserve runs out, walk up to the green crate with the yellow stripe to refill.
 - **Land:** fly down onto the ground or the landing tower near the start. Fly into a wall head-on at speed and you'll be knocked out of the air.
 
 ### Tuning while you play
@@ -86,7 +95,8 @@ Every value is exposed in the editor. While playing, press **F8** to detach from
 
 - **Character Movement → Javelin | Flight / Hover / Ground** for speeds, turn rate, dive and crash settings.
 - **Heat** for heat gain and cooling rates.
-- **Camera** for the camera profile used on foot, sprinting, hovering and flying.
+- **Camera** for the camera profile used on foot, sprinting, hovering, flying and aiming.
+- **Weapon** for damage, fire rate, magazine size, reload time, spread and recoil.
 
 Changes made while playing are lost when you stop. To keep a value, change its default in the C++ files under `Source/AnthemGame` (or ask for a change).
 
@@ -96,13 +106,17 @@ Changes made while playing are lost when you stop. To keep a value, change its d
 
 | File | What it does |
 |---|---|
-| `JavelinCharacter` | The player suit: camera, input bindings, placeholder body, flight tilt and banking. |
+| `JavelinCharacter` | The player suit: camera, input bindings, mech suit body and gun, poses, flight tilt and banking. |
 | `JavelinMovementComponent` | Movement: walk, sprint, jump, plus custom **Flight** and **Hover** modes. |
 | `JavelinHeatComponent` | Heat meter: gain while flying or hovering, cooling, overheat lockout. |
 | `CoolingVolume` | A box that cools the suit (water, waterfalls). Drag `CoolingVolume` into any level. |
-| `FlightTestArena` | The graybox course, built from simple boxes. |
+| `FlightTestArena` | The graybox course, built from simple boxes, plus the shooting range. |
 | `JavelinGameMode` | Spawns the javelin, HUD and course. |
-| `JavelinHUD` | Crosshair, heat bar, speed and controls reminder. |
+| `JavelinWeaponComponent` | The gun: firing, ammo, reloading, aiming, spread, recoil, weak spot damage. |
+| `ShotEffect` | Tracer, impact flash, puff and sparks for each shot, built from basic shapes. |
+| `ShootingTarget` | Dummies and drones to shoot. Flash when hit, blow up, respawn. |
+| `AmmoCrate` | Refills your ammo when you walk up to it. |
+| `JavelinHUD` | Crosshair, hit markers, damage numbers, target health bars, ammo, heat bar, speed and controls reminder. |
 
 Input is created in code, so no input assets are needed yet. The plan's next milestone moves heat and flight into the Gameplay Ability System.
 
