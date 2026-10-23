@@ -1,4 +1,5 @@
 #include "JavelinCharacter.h"
+#include "JavelinAbilityComponent.h"
 #include "JavelinHeatComponent.h"
 #include "JavelinMovementComponent.h"
 #include "JavelinSuitHealthComponent.h"
@@ -55,6 +56,9 @@ namespace
 	constexpr float CombatStanceTime = 1.f;
 	constexpr float MuzzleFlashTime = 0.05f;
 
+	/** How long the left arm takes to follow through after throwing a grenade. */
+	constexpr float GrenadeThrowPoseTime = 0.35f;
+
 	const FLinearColor ThrusterIdleColor(0.2f, 0.2f, 0.22f);
 	const FLinearColor ThrusterCoolColor(0.1f, 0.7f, 1.f);
 	const FLinearColor ThrusterHotColor(1.f, 0.15f, 0.05f);
@@ -99,6 +103,7 @@ AJavelinCharacter::AJavelinCharacter(const FObjectInitializer& ObjectInitializer
 	Heat = CreateDefaultSubobject<UJavelinHeatComponent>(TEXT("Heat"));
 	Weapon = CreateDefaultSubobject<UJavelinWeaponComponent>(TEXT("Weapon"));
 	SuitHealth = CreateDefaultSubobject<UJavelinSuitHealthComponent>(TEXT("SuitHealth"));
+	Abilities = CreateDefaultSubobject<UJavelinAbilityComponent>(TEXT("Abilities"));
 
 	BuildSuit();
 }
@@ -174,6 +179,7 @@ void AJavelinCharacter::BuildSuit()
 		CreatePart(*(Prefix + TEXT("NozzleGlow")), TorsoPivot, Cylinder, FVector(-36.f, Y, 6.5f), FVector(0.13f, 0.13f, 0.02f), PaintGlow);
 		BackFlames.Add(CreateFlame(*(Prefix + TEXT("BackFlame")), TorsoPivot, Cone, FVector(-36.f, Y, 6.f), 0.13f));
 	}
+	BuildMissilePod(TorsoPivot, Cube, Cylinder);
 
 	// Helmet
 	HeadPivot = CreatePivot(TEXT("HeadPivot"), TorsoPivot, FVector(4.f, 0.f, 70.f));
@@ -254,6 +260,25 @@ void AJavelinCharacter::BuildGun(USceneComponent* Hand, UStaticMesh* Cube, UStat
 	MuzzleLight->SetVisibility(false);
 }
 
+void AJavelinCharacter::BuildMissilePod(USceneComponent* Torso, UStaticMesh* Cube, UStaticMesh* Cylinder)
+{
+	// A Ranger-style launcher box riding above the left pauldron, its four tubes facing forward.
+	// It sits on the left so it doesn't block the over-the-right-shoulder camera.
+	CreatePart(TEXT("MissilePodMount"), Torso, Cube, FVector(-8.f, -40.f, 79.f), FVector(0.12f, 0.08f, 0.06f), PaintFrame);
+	CreatePart(TEXT("MissilePod"), Torso, Cube, FVector(-6.f, -40.f, 91.f), FVector(0.36f, 0.2f, 0.2f), PaintSecondary);
+	CreatePart(TEXT("MissilePodStripe"), Torso, Cube, FVector(-6.f, -40.f, 101.5f), FVector(0.3f, 0.12f, 0.01f), PaintTrim);
+	for (int32 Row = 0; Row < 2; ++Row)
+	{
+		for (int32 Column = 0; Column < 2; ++Column)
+		{
+			const FVector Location(12.5f, -40.f + (Column == 0 ? -4.5f : 4.5f), 91.f + (Row == 0 ? -4.5f : 4.5f));
+			CreatePart(*FString::Printf(TEXT("MissileTube%d"), Row * 2 + Column), Torso, Cylinder, Location,
+				FVector(0.06f, 0.06f, 0.02f), PaintFrame, FRotator(90.f, 0.f, 0.f));
+		}
+	}
+	MissileLauncher = CreatePivot(TEXT("MissileLauncher"), Torso, FVector(18.f, -40.f, 93.f));
+}
+
 UJavelinMovementComponent* AJavelinCharacter::GetJavelinMovement() const
 {
 	return CastChecked<UJavelinMovementComponent>(GetCharacterMovement());
@@ -308,6 +333,7 @@ void AJavelinCharacter::BeginPlay()
 	StartLocation = GetActorLocation();
 	StartRotation = GetActorRotation();
 	Weapon->SetMuzzle(Muzzle);
+	Abilities->SetLaunchPoints(LeftShoulder, MissileLauncher);
 	MuzzleLight->SetLightColor(MuzzleFlashColor);
 	LastYaw = GetActorRotation().Yaw;
 }
@@ -351,6 +377,8 @@ void AJavelinCharacter::CreateDefaultInput()
 	FireAction = MakeAction(TEXT("IA_Fire"), EInputActionValueType::Boolean);
 	AimAction = MakeAction(TEXT("IA_Aim"), EInputActionValueType::Boolean);
 	ReloadAction = MakeAction(TEXT("IA_Reload"), EInputActionValueType::Boolean);
+	GrenadeAction = MakeAction(TEXT("IA_Grenade"), EInputActionValueType::Boolean);
+	MissileAction = MakeAction(TEXT("IA_Missiles"), EInputActionValueType::Boolean);
 
 	UInputMappingContext* Context = NewObject<UInputMappingContext>(this, TEXT("IMC_Javelin"));
 
@@ -397,6 +425,10 @@ void AJavelinCharacter::CreateDefaultInput()
 	Map(AimAction, EKeys::Gamepad_LeftTrigger);
 	Map(ReloadAction, EKeys::R);
 	Map(ReloadAction, EKeys::Gamepad_FaceButton_Left);
+	Map(GrenadeAction, EKeys::Q);
+	Map(GrenadeAction, EKeys::Gamepad_LeftShoulder);
+	Map(MissileAction, EKeys::E);
+	Map(MissileAction, EKeys::Gamepad_RightShoulder);
 
 	DefaultMappingContext = Context;
 }
@@ -453,6 +485,14 @@ void AJavelinCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	if (ReloadAction)
 	{
 		Input->BindAction(ReloadAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnReloadPressed);
+	}
+	if (GrenadeAction)
+	{
+		Input->BindAction(GrenadeAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnGrenadePressed);
+	}
+	if (MissileAction)
+	{
+		Input->BindAction(MissileAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnMissilePressed);
 	}
 }
 
@@ -617,6 +657,27 @@ void AJavelinCharacter::OnReloadPressed()
 	Weapon->StartReload();
 }
 
+void AJavelinCharacter::OnGrenadePressed()
+{
+	if (IsSuitDown())
+	{
+		return;
+	}
+	// Using gear stops a sprint, like shooting.
+	GetJavelinMovement()->SetSprinting(false);
+	Abilities->UseGear(EJavelinGear::Grenade);
+}
+
+void AJavelinCharacter::OnMissilePressed()
+{
+	if (IsSuitDown())
+	{
+		return;
+	}
+	GetJavelinMovement()->SetSprinting(false);
+	Abilities->UseGear(EJavelinGear::Missiles);
+}
+
 bool AJavelinCharacter::CanFireWeapon() const
 {
 	return !GetJavelinMovement()->IsInFlight() && !IsSuitDown();
@@ -629,7 +690,8 @@ bool AJavelinCharacter::CanAimWeapon() const
 
 bool AJavelinCharacter::IsInCombatStance() const
 {
-	return CanFireWeapon() && (Weapon->IsAiming() || Weapon->GetTimeSinceLastShot() < CombatStanceTime);
+	const float SinceGear = FMath::Min(Abilities->GetTimeSinceUsed(EJavelinGear::Grenade), Abilities->GetTimeSinceUsed(EJavelinGear::Missiles));
+	return CanFireWeapon() && (Weapon->IsAiming() || Weapon->GetTimeSinceLastShot() < CombatStanceTime || SinceGear < CombatStanceTime);
 }
 
 void AJavelinCharacter::UpdateCombatFacing()
@@ -709,6 +771,7 @@ void AJavelinCharacter::Reboot()
 	}
 	SuitHealth->Restore();
 	Weapon->RefillAmmo();
+	Abilities->ResetCooldowns();
 }
 
 float AJavelinCharacter::GetTimeUntilReboot() const
@@ -950,6 +1013,15 @@ FJavelinSuitPose AJavelinCharacter::ComputeTargetPose(float DeltaSeconds)
 		Pose.ElbowBend[1] = 85.f;
 		Pose.ShoulderPitch[0] = 45.f + Fumble;
 		Pose.ElbowBend[0] = 75.f;
+	}
+
+	// Grenade throw: the left arm follows through from overhead down toward the target.
+	const float SinceThrow = Abilities->GetTimeSinceUsed(EJavelinGear::Grenade);
+	if (SinceThrow < GrenadeThrowPoseTime && !JavelinMovement->IsInFlight())
+	{
+		const float Alpha = SinceThrow / GrenadeThrowPoseTime;
+		Pose.ShoulderPitch[0] = FMath::Lerp(160.f, 70.f, Alpha);
+		Pose.ElbowBend[0] = FMath::Lerp(40.f, 5.f, Alpha);
 	}
 	return Pose;
 }

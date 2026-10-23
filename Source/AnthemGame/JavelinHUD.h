@@ -2,12 +2,14 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/HUD.h"
+#include "JavelinAbilityComponent.h"
 #include "JavelinHUD.generated.h"
 
 /**
  * Crosshair, hit markers, damage numbers, target and enemy health bars, ammo,
- * shields and armor, damage direction arrows, heat bar, movement state, the
- * enemy camp's wave status and a controls reminder, drawn without any UI assets.
+ * shields and armor, damage direction arrows, heat bar, movement state, gear
+ * cooldown icons and missile lock-on brackets, the enemy camp's wave status
+ * and a controls reminder, drawn without any UI assets.
  */
 UCLASS()
 class ANTHEMGAME_API AJavelinHUD : public AHUD
@@ -29,6 +31,9 @@ private:
 	void DrawDamageFeedback(const class AJavelinCharacter* Javelin, float CenterX, float CenterY);
 	void DrawEncounterInfo(const class AJavelinCharacter* Javelin, float CenterX);
 	void DrawSuitDown(const class AJavelinCharacter* Javelin, float CenterX, float CenterY);
+	void DrawGear(const class AJavelinCharacter* Javelin, float CenterX);
+	void DrawGearGlyph(EJavelinGear Gear, float CenterX, float CenterY, const FLinearColor& Color);
+	void DrawMissileLocks(const class AJavelinCharacter* Javelin);
 
 	/** Screen position of a world point, or false if it's behind the camera. */
 	bool ProjectToScreen(const FVector& WorldLocation, FVector2D& OutScreen) const;
