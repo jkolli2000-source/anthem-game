@@ -265,13 +265,45 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> MissileAction;
 
-	/** Gamepad look speed in degrees per second. */
-	UPROPERTY(EditAnywhere, Category = "Input")
-	float StickLookRate = 160.f;
-
-	/** Look speed multiplier while aiming down sights, for finer aim. */
+	/** Mouse look speed multiplier while aiming down sights, for finer aim. */
 	UPROPERTY(EditAnywhere, Category = "Input", meta = (ClampMin = "0.05", ClampMax = "1"))
 	float AimLookScale = 0.6f;
+
+	/** Right stick turn speed (yaw, pitch) in degrees per second at full tilt, before the hold speed-up. */
+	UPROPERTY(EditAnywhere, Category = "Input|Gamepad")
+	FVector2D StickLookRate = FVector2D(130.f, 85.f);
+
+	/** Right stick turn speed (yaw, pitch) at full tilt while aiming down sights. */
+	UPROPERTY(EditAnywhere, Category = "Input|Gamepad")
+	FVector2D StickAimLookRate = FVector2D(60.f, 40.f);
+
+	/** Shapes the stick response: higher keeps small nudges slower and more precise. 1 is linear. */
+	UPROPERTY(EditAnywhere, Category = "Input|Gamepad", meta = (ClampMin = "1", ClampMax = "4"))
+	float StickResponseExponent = 2.2f;
+
+	/** How far the stick must be pushed sideways (0 to 1) before holding it speeds up turning. */
+	UPROPERTY(EditAnywhere, Category = "Input|Gamepad", meta = (ClampMin = "0.5", ClampMax = "1"))
+	float StickRampThreshold = 0.85f;
+
+	/** Seconds the stick must stay pushed before turning starts to speed up. */
+	UPROPERTY(EditAnywhere, Category = "Input|Gamepad")
+	float StickRampDelay = 0.2f;
+
+	/** Seconds from the start of the speed-up to the top turn speed. */
+	UPROPERTY(EditAnywhere, Category = "Input|Gamepad")
+	float StickRampTime = 0.5f;
+
+	/** Extra yaw speed in degrees per second once the speed-up is complete. */
+	UPROPERTY(EditAnywhere, Category = "Input|Gamepad")
+	float StickRampYawBonus = 120.f;
+
+	/** Extra yaw speed once the speed-up is complete while aiming down sights. */
+	UPROPERTY(EditAnywhere, Category = "Input|Gamepad")
+	float StickAimRampYawBonus = 50.f;
+
+	/** Gamepad turning slows to this fraction while the crosshair is over an enemy and you are aiming. */
+	UPROPERTY(EditAnywhere, Category = "Input|Gamepad", meta = (ClampMin = "0.1", ClampMax = "1"))
+	float StickAimFriction = 0.6f;
 
 	UPROPERTY(EditAnywhere, Category = "Camera")
 	FJavelinCameraProfile GroundCamera;
@@ -340,6 +372,7 @@ private:
 	void MoveCompleted();
 	void Look(const FInputActionValue& Value);
 	void LookStick(const FInputActionValue& Value);
+	void LookStickCompleted();
 	void OnJumpPressed();
 	void OnJumpReleased();
 	void OnThrustPressed();
@@ -390,4 +423,7 @@ private:
 	float VisualPitch = 0.f;
 	float VisualRoll = 0.f;
 	float LastYaw = 0.f;
+
+	/** How long the right stick has been held far enough sideways to speed up turning. */
+	float StickHoldTime = 0.f;
 };

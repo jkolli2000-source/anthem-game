@@ -104,6 +104,7 @@ You can shoot and use gear on the ground, while jumping or falling, and while ho
 Every value is exposed in the editor. While playing, press **F8** to detach from the javelin, click it in the world (or select **JavelinCharacter** in the Outliner), and look in the **Details** panel:
 
 - **Character Movement → Javelin | Flight / Hover / Ground** for speeds, turn rate, dive and crash settings.
+- **Input → Gamepad** for right stick aiming: turn speed on foot and while aiming, how curved the response is (higher = slower small nudges), and how much and how quickly turning speeds up when you hold the stick to the side.
 - **Heat** for heat gain and cooling rates.
 - **Camera** for the camera profile used on foot, sprinting, hovering, flying and aiming. Socket Offset Y moves the camera sideways (bigger = suit further left), Arm Length is the distance behind you.
 - **Weapon** for damage, fire rate, magazine size, reload time, spread and recoil.
