@@ -441,12 +441,24 @@ void AJavelinHUD::DrawDamageFeedback(const AJavelinCharacter* Javelin, float Cen
 
 void AJavelinHUD::DrawEncounterInfo(const AJavelinCharacter* Javelin, float CenterX)
 {
-	TActorIterator<AEnemyEncounter> It(GetWorld());
-	if (!It)
+	// The status line is for the nearest camp; every camp gets a waypoint.
+	const AEnemyEncounter* Encounter = nullptr;
+	float NearestDistance = UE_BIG_NUMBER;
+	TArray<const AEnemyEncounter*> Camps;
+	for (TActorIterator<AEnemyEncounter> It(GetWorld()); It; ++It)
+	{
+		Camps.Add(*It);
+		const float Distance = FVector::Dist2D(Javelin->GetActorLocation(), It->GetActorLocation());
+		if (Distance < NearestDistance)
+		{
+			NearestDistance = Distance;
+			Encounter = *It;
+		}
+	}
+	if (!Encounter)
 	{
 		return;
 	}
-	const AEnemyEncounter* Encounter = *It;
 
 	// Wave status at the top of the screen.
 	FString Status;
@@ -464,12 +476,16 @@ void AJavelinHUD::DrawEncounterInfo(const AJavelinCharacter* Javelin, float Cent
 	}
 	DrawCenteredText(Status, StatusColor, CenterX, 20.f, 1.1f);
 
-	// A waypoint over the camp while you're away from it.
-	const FVector CampLocation = Encounter->GetActorLocation();
-	const float Distance = FVector::Dist2D(Javelin->GetActorLocation(), CampLocation);
-	FVector2D Screen;
-	if (Distance > Encounter->CampRadius && ProjectToScreen(CampLocation + FVector(0.f, 0.f, 1500.f), Screen))
+	// A waypoint over each camp while you're away from it.
+	for (const AEnemyEncounter* Camp : Camps)
 	{
+		const FVector CampLocation = Camp->GetActorLocation();
+		const float Distance = FVector::Dist2D(Javelin->GetActorLocation(), CampLocation);
+		FVector2D Screen;
+		if (Distance <= Camp->CampRadius || !ProjectToScreen(CampLocation + FVector(0.f, 0.f, 1500.f), Screen))
+		{
+			continue;
+		}
 		const float Size = 10.f;
 		DrawLine(Screen.X, Screen.Y - Size, Screen.X + Size, Screen.Y, EnemyColor, 3.f);
 		DrawLine(Screen.X + Size, Screen.Y, Screen.X, Screen.Y + Size, EnemyColor, 3.f);

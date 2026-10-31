@@ -2,7 +2,7 @@
 
 A flying exosuit ("javelin") action game inspired by Anthem, built in **Unreal Engine 5** with C++.
 
-**Current milestone: 1, flight feel.** You can walk, sprint, jump, hover and fly a placeholder Ranger suit around a graybox course. Flying builds **heat**; overheat and you drop out of the sky until the suit cools. Water, the waterfall and steep dives cool you down. You also carry an **assault rifle** with aiming, ammo, reloads and hit effects, and there's a shooting range next to the start. Your suit has **shields and armor**, and an **enemy camp** sends waves of ground soldiers and flying drones that chase you and shoot back. For bigger hits you have two pieces of Anthem-style **gear**, a frag grenade and a homing missile launcher, each on its own cooldown.
+**Current milestone: 1, flight feel.** You can walk, sprint, jump, hover and fly a placeholder Ranger suit around a huge **rainforest jungle**: rolling hills, cliffs, two rivers, lakes, waterfalls, rock tunnels, ruins, giant canopy trees and thousands of plants, all built from code. Flying builds **heat**; overheat and you drop out of the sky until the suit cools. Rivers, lakes, waterfalls and steep dives cool you down. You also carry an **assault rifle** with aiming, ammo, reloads and hit effects, and there's a shooting range next to the start. Your suit has **shields and armor**, and an **enemy camp** sends waves of ground soldiers and flying drones that chase you and shoot back. For bigger hits you have two pieces of Anthem-style **gear**, a frag grenade and a homing missile launcher, each on its own cooldown.
 
 The full design is in the project's UE5 implementation plan. Characters are placeholder shapes for now; art comes later.
 
@@ -49,7 +49,7 @@ The project ships with code only, so you make the level in the editor:
 
 From now on the editor opens this level automatically. (The first time, before it exists, you may see a "map not found" message; ignore it.)
 
-You don't need to place anything. When you press Play, the game spawns your javelin and builds the graybox flight course: 1 km of ground, rock pillars, four arches, a landing tower, a lake and a waterfall.
+You don't need to place anything. When you press Play, the game spawns your javelin and builds the jungle around you (see **The jungle** below). It takes a few seconds to build, so the first frame can be slow. The gray floor that comes with the Basic level is hidden automatically.
 
 ---
 
@@ -79,13 +79,30 @@ You don't need to place anything. When you press Play, the game spawns your jave
 
 You can shoot and use gear on the ground, while jumping or falling, and while hovering. Like in Anthem, weapons and gear are stowed while you fly: press **Space** to drop into a hover and shoot.
 
+### The jungle
+
+The world is about **4 km across** and is built entirely from code when you press Play, using Unreal's basic shapes. It's the same every time unless you change its **Random Seed**.
+
+- **The start clearing** has the shooting range and the first enemy camp. Jungle surrounds it on every side.
+- **Rivers:** two winding rivers cross the map, one to the north of the start and one to the west. Where they run through hills they cut canyons you can fly down. The lowlands have lakes and swamps.
+- **Waterfalls:** three cliffs with water pouring off them into pools. Fly through the falling water to cool off fast.
+- **Giant canopy trees:** about 30 huge trees, 90 to 150 m tall, with round branch platforms you can land on. Three of them stand around the start. Leaves have no collision, so you can fly straight through the canopy.
+- **Ruins:** four ruined temples out in the jungle, each with its own enemy camp. The red **ENEMY CAMP** markers show where they are and how far. Camps farther from the start send bigger waves.
+- **Rock tunnels:** two caves you can fly or walk through. The first is just behind the start camp, about 340 m south.
+- **Mountains** ring the edge of the world, and stone spires stick up out of the forest.
+- **Fog and light:** when play starts the level's fog becomes a thick, low jungle haze with light shafts, and the sun turns warm and golden. Fly higher to see farther.
+
+**If it runs slowly:** place a **JungleWorld** in the level as described next, and lower its **Vegetation Density** (for example to 0.5) or **Tree Draw Distance**.
+
+**To tweak the jungle:** drag a **JungleWorld** from the **Place Actors** panel (search "JungleWorld") into the level at 0, 0, 0. You'll see the whole jungle in the editor, and its **Details** panel under **Jungle** has the seed, world size, hill and mountain heights, water level, plant density, draw distances, and every color. It rebuilds after each change, which takes a few seconds. Save the level to keep it. To go back to the old graybox course, delete the JungleWorld and drag a **FlightTestArena** into the level instead. The game only builds the jungle by itself when the level has neither.
+
 ### Things to try
 
 - **Take off and fly:** press **F**, then steer with the mouse. Hold **W** to boost and **S** to slow down.
 - **Hover:** jump with **Space**, press **Space** again in the air, and look around. Hover heats you up more slowly than flying.
 - **Overheat:** fly without stopping for about 11 seconds. The heat bar turns red, you drop, and you can't fly again until the bar is empty.
-- **Cool down mid-flight:** dive steeply toward the ground, skim low over the blue lake, or fly through the waterfall (the lake and waterfall are about 200 m from the start; look for the tall cliff). The bar shows **COOLING**.
-- **Shooting range:** right in front of the start, beside the landing tower, there are training dummies, dummies that strafe, and floating drones. Shoot the glowing orange head or eye for double damage (orange damage numbers). Destroyed targets come back after a few seconds.
+- **Cool down mid-flight:** dive steeply toward the ground, skim low over a river or lake, or fly through a waterfall. The nearest waterfall is about 350 m from the start, to the right and a little behind you as you face the shooting range; look for the cliff with white water down it. The bar shows **COOLING**.
+- **Shooting range:** right in front of the start there are training dummies, dummies that strafe, and floating drones. Shoot the glowing orange head or eye for double damage (orange damage numbers). Destroyed targets come back after a few seconds.
 - **Camera:** like Anthem, the camera sits over your right shoulder, so your suit stands a little left of center and the crosshair has a clear view. The crosshair turns **red** when it's over an enemy. In flight the camera swings in behind you and pulls far back.
 - **Aim down sights:** hold the right mouse button to zoom over the shoulder and tighten your spread. Long bursts bloom the crosshair; let go briefly to recover accuracy.
 - **Hover and shoot:** jump, press **Space** to hover, and shoot the drones in the air.
@@ -97,7 +114,7 @@ You can shoot and use gear on the ground, while jumping or falling, and while ho
 - **Shields and armor:** the blue bar (bottom left) is shields, the orange bar is armor. Hits take shields first; shields recharge on their own after 4 seconds without being hit, so duck behind a wall. Armor doesn't recharge: pick up the **green orbs** enemies drop. **White orbs** give ammo. Red arcs around the crosshair point toward whoever is shooting you.
 - **Going down:** if your armor runs out the suit goes down and reboots back at the start after 5 seconds, with everything refilled.
 - **Fly to escape:** soldiers can't follow you into the air, but drones can.
-- **Land:** fly down onto the ground or the landing tower near the start. Fly into a wall head-on at speed and you'll be knocked out of the air.
+- **Land:** fly down onto the ground, a stone spire, or one of the round platforms in a giant canopy tree. Fly into a wall head-on at speed and you'll be knocked out of the air.
 
 ### Tuning while you play
 
@@ -124,8 +141,9 @@ Changes made while playing are lost when you stop. To keep a value, change its d
 | `JavelinMovementComponent` | Movement: walk, sprint, jump, plus custom **Flight** and **Hover** modes. |
 | `JavelinHeatComponent` | Heat meter: gain while flying or hovering, cooling, overheat lockout. |
 | `CoolingVolume` | A box that cools the suit (water, waterfalls). Drag `CoolingVolume` into any level. |
-| `FlightTestArena` | The graybox course, built from simple boxes, plus the shooting range and enemy camp. |
-| `JavelinGameMode` | Spawns the javelin, HUD and course. |
+| `JungleWorld` | The rainforest: terrain, rivers, lakes, waterfalls, caves, ruins, trees and plants, fog and light, water cooling, and the ruin camps. |
+| `FlightTestArena` | The old graybox course, plus the shooting range and first enemy camp (the jungle uses just those). |
+| `JavelinGameMode` | Spawns the javelin, HUD and jungle. |
 | `JavelinWeaponComponent` | The gun: firing, ammo, reloading, aiming, spread, recoil, weak spot damage. |
 | `ShotEffect` | Tracer, impact flash, puff and sparks for each shot, built from basic shapes. |
 | `ShootingTarget` | Dummies and drones to shoot. Flash when hit, blow up, respawn. |

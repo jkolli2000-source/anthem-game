@@ -15,7 +15,11 @@ public:
 
 	virtual void InitGameState() override;
 
-	/** Builds the graybox flight course at play time if the level doesn't already have one. */
+	/** Builds the rainforest jungle at play time if the level doesn't already have a jungle or a flight course. */
+	UPROPERTY(EditAnywhere, Category = "Javelin")
+	bool bSpawnJungle = true;
+
+	/** With the jungle turned off, builds the old graybox flight course instead. */
 	UPROPERTY(EditAnywhere, Category = "Javelin")
 	bool bSpawnFlightTestArena = true;
 };
