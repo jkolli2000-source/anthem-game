@@ -15,6 +15,9 @@
 
 namespace
 {
+	/** How hard a blast throws enemies at its center, in cm/s. Lighter enemies fly further. */
+	constexpr float BlastKnockback = 1300.f;
+
 	/** Missiles leave the pod at this speed, then speed up as they home in. */
 	constexpr float MissileLaunchSpeed = 1400.f;
 
@@ -445,6 +448,26 @@ float UJavelinAbilityComponent::ApplyBlastDamage(UWorld* World, const FVector& C
 			{
 				Feedback->AddHitFeedback(Victim.Value.Point, Dealt, false, !UJavelinWeaponComponent::IsLivingTarget(Actor));
 			}
+
+			// The blast throws enemies away from it, a little upward, hardest near the middle.
+			if (AJavelinEnemy* Enemy = Cast<AJavelinEnemy>(Actor))
+			{
+				FVector Away = Victim.Value.Point - Center;
+				Away = Away.IsNearlyZero() ? FVector::UpVector : Away.GetSafeNormal();
+				Away.Z += 0.35f;
+				Enemy->ApplyKnockback(Away.GetSafeNormal() * BlastKnockback * Falloff);
+			}
+		}
+	}
+
+	// Explosions shake the camera, more the closer you are.
+	if (AJavelinCharacter* Javelin = Cast<AJavelinCharacter>(InstigatorPawn))
+	{
+		const float Closeness = 1.f - FVector::Dist(Javelin->GetActorLocation(), Center) / (Radius * 5.f);
+		if (Closeness > 0.f)
+		{
+			Javelin->AddCameraTrauma(0.45f * Closeness);
+			Javelin->PlayRumble(0.7f * Closeness, 0.3f, true);
 		}
 	}
 	return Total;

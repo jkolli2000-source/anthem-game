@@ -16,13 +16,22 @@ struct FJavelinDamageNumber
 	float SpawnTime = 0.f;
 };
 
+/** Called each time the gun fires a round. */
+DECLARE_MULTICAST_DELEGATE(FOnJavelinWeaponFired);
+
 /**
  * The javelin's gun: an automatic rifle with a magazine, reserve ammo,
  * reloading, aim-down-sights, spread that blooms while you fire, and recoil.
  *
  * Shots are instant line traces from the camera, so they go where the
  * crosshair points, then checked from the muzzle so you can't shoot through
- * a wall next to you. Hitting a part tagged "WeakSpot" does extra damage.
+ * a wall next to you. Hitting a part tagged "WeakSpot" does extra damage,
+ * armor plates (parts tagged "Paint.Armor") soak some of it, and damage
+ * drops off at long range.
+ *
+ * Recoil climbs the longer you hold the trigger, drifts a little to one
+ * side, and when you let go the view settles most of the way back down.
+ * Moving and being in the air widen the spread.
  * It damages anything that takes damage: shooting range targets and enemies.
  *
  * The owner must be an AJavelinCharacter; it decides when the gun can be used
@@ -48,8 +57,28 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Damage", meta = (ClampMin = "1"))
 	float WeakSpotMultiplier = 2.f;
 
+	/** Damage multiplier for hitting enemy armor plates. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Damage", meta = (ClampMin = "0", ClampMax = "1"))
+	float ArmorPlateMultiplier = 0.75f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Damage", meta = (ClampMin = "100", Units = "cm"))
 	float Range = 15000.f;
+
+	/** Full damage out to this distance... */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Damage", meta = (ClampMin = "0", Units = "cm"))
+	float FalloffStartRange = 4000.f;
+
+	/** ...dropping to FalloffMinDamage at this distance and beyond. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Damage", meta = (ClampMin = "0", Units = "cm"))
+	float FalloffEndRange = 10000.f;
+
+	/** Fraction of damage left at long range. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Damage", meta = (ClampMin = "0", ClampMax = "1"))
+	float FalloffMinDamage = 0.6f;
+
+	/** How hard each round shoves what it hits, in cm/s. Enemies get pushed back and flinch. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Damage", meta = (ClampMin = "0", Units = "cm/s"))
+	float HitImpulse = 45.f;
 
 	/** Rounds per minute while the trigger is held. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Firing", meta = (ClampMin = "1"))
@@ -79,6 +108,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Accuracy", meta = (ClampMin = "0", Units = "deg"))
 	float MaxBloom = 3.f;
 
+	/** Extra spread from the hip while moving at full sprint. A third as much while aiming. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Accuracy", meta = (ClampMin = "0", Units = "deg"))
+	float MovingSpread = 1.6f;
+
+	/** Extra spread while jumping or falling. Hovering is a stable platform and doesn't add any. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Accuracy", meta = (ClampMin = "0", Units = "deg"))
+	float AirborneSpread = 1.f;
+
 	/** How fast the extra spread from firing goes away, in degrees per second. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Accuracy", meta = (ClampMin = "0"))
 	float BloomRecovery = 6.f;
@@ -90,6 +127,29 @@ public:
 	/** Random sideways kick per shot, up to this much either way. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Recoil", meta = (ClampMin = "0", Units = "deg"))
 	float RecoilYaw = 0.2f;
+
+	/** Steady sideways drift per shot. Positive pulls right. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Recoil", meta = (Units = "deg"))
+	float RecoilYawDrift = 0.06f;
+
+	/** How much harder each shot kicks the longer you hold the trigger. 0.5 means the kick grows up to 1.5 times. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Recoil", meta = (ClampMin = "0"))
+	float RecoilClimb = 0.6f;
+
+	/** Shots it takes for the kick to reach its strongest. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Recoil", meta = (ClampMin = "1"))
+	int32 RecoilClimbShots = 10;
+
+	/** How much of the upward kick the view settles back down after you stop firing. 0 none, 1 all of it. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Recoil", meta = (ClampMin = "0", ClampMax = "1"))
+	float RecoilRecovery = 0.6f;
+
+	/** How fast the view settles back, in degrees per second. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Recoil", meta = (ClampMin = "0", Units = "deg"))
+	float RecoilRecoverySpeed = 14.f;
+
+	/** Called each time the gun fires a round. */
+	FOnJavelinWeaponFired OnFired;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Effects")
 	FLinearColor TracerColor = FLinearColor(1.f, 0.75f, 0.3f);
@@ -147,6 +207,9 @@ public:
 	float GetCurrentSpread() const;
 
 	float GetTimeSinceLastShot() const;
+
+	/** 1 the moment a round fires, fading to 0 quickly. Drives the arms kicking back. */
+	float GetRecoilKick() const { return RecoilKick; }
 	float GetTimeSinceLastHit() const;
 	bool WasLastHitKill() const { return bLastHitKill; }
 	bool WasLastHitWeakSpot() const { return bLastHitWeakSpot; }
@@ -183,4 +246,11 @@ private:
 	bool bReloading = false;
 	bool bLastHitKill = false;
 	bool bLastHitWeakSpot = false;
+
+	/** Rounds fired since the trigger was last let go for a moment. */
+	int32 SustainedShots = 0;
+
+	/** Upward kick still waiting to settle back down. */
+	float RecoilToRecover = 0.f;
+	float RecoilKick = 0.f;
 };
