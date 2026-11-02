@@ -1,6 +1,10 @@
 #include "EnemyDrone.h"
 #include "Components/CapsuleComponent.h"
+#include "DustEffect.h"
+#include "Engine/World.h"
 #include "JavelinCharacter.h"
+#include "Kismet/GameplayStatics.h"
+#include "ShotEffect.h"
 
 AEnemyDrone::AEnemyDrone()
 {
@@ -25,6 +29,11 @@ AEnemyDrone::AEnemyDrone()
 	}
 
 	Muzzle->SetRelativeLocation(FVector(75.f, 0.f, 8.f));
+
+	// Light and airborne: hits and blasts knock it around in every direction.
+	bCanBeKnockedUp = true;
+	Mass = 0.7f;
+	FlinchPerDamage = 12.f;
 
 	MaxHealth = 160.f;
 	SightRange = 7000.f;
@@ -108,4 +117,52 @@ void AEnemyDrone::UpdateAnimation(float DeltaSeconds)
 {
 	Ring->AddLocalRotation(FRotator(0.f, (IsEngaged() ? 220.f : 60.f) * DeltaSeconds, 0.f));
 	Body->SetRelativeLocation(FVector(0.f, 0.f, 12.f * FMath::Sin(AnimTime * 2.f)));
+}
+
+void AEnemyDrone::UpdateDeath(float DeltaSeconds)
+{
+	UWorld* World = GetWorld();
+
+	// Power's gone: it drops like a stone, keeps some of the push from what killed it, and spins out.
+	DeathVelocity.Z -= 1400.f * DeltaSeconds;
+	DeathVelocity *= FMath::Exp(-0.3f * DeltaSeconds);
+	Body->AddLocalRotation(FRotator(140.f * DeltaSeconds, 320.f * DeltaSeconds, 210.f * DeltaSeconds));
+	Ring->AddLocalRotation(FRotator(0.f, 40.f * DeltaSeconds, 0.f));
+
+	// A trail of black smoke behind it.
+	SmokeTimer -= DeltaSeconds;
+	if (SmokeTimer <= 0.f)
+	{
+		SmokeTimer = 0.07f;
+		ADustEffect::Spawn(World, GetActorLocation(), 0.f, 0.5f, 1, FLinearColor(0.04f, 0.04f, 0.045f), 1.2f);
+	}
+
+	// Blow up on hitting the ground (or give up after a while if it fell off the world).
+	const FVector Step = DeathVelocity * DeltaSeconds;
+	const float Radius = Collision->GetScaledCapsuleRadius();
+	FVector Ground;
+	const bool bHitGround = FindGround(GetActorLocation() + FVector(0.f, 0.f, 50.f), 50.f + Radius + FMath::Max(0.f, static_cast<float>(-Step.Z)), Ground);
+	if (bHitGround || DeathTime > 6.f)
+	{
+		const FVector Blast = bHitGround ? Ground + FVector(0.f, 0.f, 30.f) : GetActorLocation();
+		if (AShotEffect* Effect = World->SpawnActor<AShotEffect>(Blast, FRotator::ZeroRotator))
+		{
+			Effect->InitBurst(Blast, WeakSpotColor, 3.5f);
+		}
+		ADustEffect::Spawn(World, Blast, 260.f, 1.2f, 9, FLinearColor(0.08f, 0.07f, 0.06f), 1.3f);
+		if (AJavelinCharacter* Player = Cast<AJavelinCharacter>(UGameplayStatics::GetPlayerPawn(this, 0)))
+		{
+			// Feel it if you're close.
+			const float Closeness = 1.f - FVector::Dist(Player->GetActorLocation(), Blast) / 3000.f;
+			if (Closeness > 0.f)
+			{
+				Player->AddCameraTrauma(0.35f * Closeness);
+				Player->PlayRumble(0.6f * Closeness, 0.25f, true);
+			}
+		}
+		Destroy();
+		return;
+	}
+
+	AddActorWorldOffset(Step, false);
 }

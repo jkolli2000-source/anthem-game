@@ -56,6 +56,26 @@ struct FJavelinSuitPose
 	float FootFlame = 0.f;
 };
 
+/** A simple damped spring, for bounces that overshoot a little and settle: landings, camera dips, flinches. */
+struct FJavelinSpring
+{
+	float Value = 0.f;
+	float Speed = 0.f;
+
+	void Update(float DeltaSeconds, float Stiffness, float Damping)
+	{
+		// Small steps keep stiff springs stable at low frame rates.
+		float Remaining = FMath::Min(DeltaSeconds, 0.1f);
+		while (Remaining > 0.f)
+		{
+			const float Step = FMath::Min(Remaining, 1.f / 120.f);
+			Speed += (-Stiffness * Value - Damping * Speed) * Step;
+			Value += Speed * Step;
+			Remaining -= Step;
+		}
+	}
+};
+
 /**
  * The player's javelin (Ranger for now).
  *
@@ -68,6 +88,12 @@ struct FJavelinSuitPose
  *  - R / X: reload. You can shoot on the ground, in the air and while hovering, but not while flying.
  *  - Q / left bumper: frag grenade. E / right bumper: homing missiles. Each has its own cooldown,
  *    and like the gun they can't be used while flying.
+ *
+ * The suit is meant to feel heavy: footsteps thump the camera, landings
+ * compress the legs and dip the camera (hard ones kick up dust and slow you
+ * for a moment), the gun kicks the arms and camera, hits make the suit
+ * flinch, and the camera shakes with impacts, explosions and fast flight.
+ * Gamepads rumble along with all of it.
  *
  * The suit has shields and armor (UJavelinSuitHealthComponent). When the armor
  * runs out the suit goes down, and after a few seconds it reboots back at
@@ -121,6 +147,13 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Javelin")
 	bool TryStartHover();
+
+	/** Shakes the camera. 0.1 is a nudge, 0.5 a big hit, 1 the most it shakes. Shakes add up and fade out. */
+	UFUNCTION(BlueprintCallable, Category = "Javelin|Feel")
+	void AddCameraTrauma(float Amount);
+
+	/** Rumbles a gamepad, if one is being used. Heavy uses the big motors too. */
+	void PlayRumble(float Intensity, float Duration, bool bHeavy);
 
 protected:
 	virtual void BeginPlay() override;
@@ -351,6 +384,60 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Visuals")
 	float VisualTiltSpeed = 8.f;
 
+	/** How far the suit leans into speeding up, braking and turning on foot, in degrees per m/s². */
+	UPROPERTY(EditAnywhere, Category = "Visuals")
+	float GroundLeanFactor = 0.35f;
+
+	UPROPERTY(EditAnywhere, Category = "Visuals", meta = (Units = "deg"))
+	float MaxGroundLean = 7.f;
+
+	/** Biggest camera shake angles, at full shake. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Camera Shake")
+	FRotator MaxShakeAngles = FRotator(2.5f, 2.f, 3.f);
+
+	/** How fast the camera jitters while shaking. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Camera Shake", meta = (ClampMin = "1"))
+	float ShakeFrequency = 22.f;
+
+	/** How quickly a shake fades out, in shake per second. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Camera Shake", meta = (ClampMin = "0.1"))
+	float ShakeDecay = 1.4f;
+
+	/** Steady camera buffeting at full flight boost. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Camera Shake", meta = (ClampMin = "0", ClampMax = "1"))
+	float FlightBuffet = 0.06f;
+
+	/** Scales every camera shake. 0 turns shaking off. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Camera Shake", meta = (ClampMin = "0", ClampMax = "2"))
+	float CameraShakeScale = 1.f;
+
+	/** Falling speed for the softest landing that thumps. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Landing", meta = (ClampMin = "0", Units = "cm/s"))
+	float SoftLandingSpeed = 450.f;
+
+	/** Falling speed for the heaviest landing: legs fully crouched, big dust ring, strong shake. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Landing", meta = (ClampMin = "0", Units = "cm/s"))
+	float HeavyLandingSpeed = 2500.f;
+
+	/** Color of the dust kicked up by landings, footsteps and the hover jets. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Dust")
+	FLinearColor DustColor = FLinearColor(0.3f, 0.26f, 0.19f);
+
+	/** Hover jets blow up dust when the ground is closer than this. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Dust", meta = (ClampMin = "0", Units = "cm"))
+	float JetDustHeight = 600.f;
+
+	/** How far a hit shoves the suit, in cm/s per point of damage. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Hits", meta = (ClampMin = "0"))
+	float HitKnockbackPerDamage = 12.f;
+
+	UPROPERTY(EditAnywhere, Category = "Feel|Rumble")
+	bool bGamepadRumble = true;
+
+	/** Scales every rumble. */
+	UPROPERTY(EditAnywhere, Category = "Feel|Rumble", meta = (ClampMin = "0", ClampMax = "1"))
+	float RumbleScale = 1.f;
+
 	/** Distance covered by one full walk cycle (two steps). */
 	UPROPERTY(EditAnywhere, Category = "Visuals|Animation", meta = (Units = "cm"))
 	float WalkStrideLength = 170.f;
@@ -394,6 +481,17 @@ private:
 	UFUNCTION()
 	void HandleOverheated();
 
+	void HandleLanded(const FVector& ImpactVelocity, bool bFromFlight);
+	void HandleCrashed(const FVector& ImpactVelocity, const FVector& ImpactPoint);
+	void HandleWeaponFired();
+	void HandleFootstep(int32 Side, float Weight);
+	void CheckGearUsed();
+	void UpdateJetDust(float DeltaSeconds);
+	void UpdateFeelSprings(float DeltaSeconds);
+
+	/** Where the bottom of the capsule is: the suit's feet when standing. */
+	FVector GetFeetLocation() const;
+
 	UFUNCTION()
 	void HandleSuitDown();
 
@@ -426,4 +524,26 @@ private:
 
 	/** How long the right stick has been held far enough sideways to speed up turning. */
 	float StickHoldTime = 0.f;
+
+	/** How much the camera is shaking, 0 to 1. Fades over time. */
+	float CameraTrauma = 0.f;
+	float ShakeTime = 0.f;
+
+	/** Legs crouching under a landing: 0 standing, 1 fully crouched. */
+	FJavelinSpring LandingCrouch;
+
+	/** Camera height bounce from landings and footsteps, in cm. */
+	FJavelinSpring CameraDip;
+
+	/** Quick camera-only kick from each shot, in degrees. */
+	FJavelinSpring CameraKick;
+
+	/** Torso snapping back from a hit, in degrees. */
+	FJavelinSpring HitFlinch;
+
+	FVector LastVelocity = FVector::ZeroVector;
+	FVector SmoothedAcceleration = FVector::ZeroVector;
+	float PrevGrenadeSinceUsed = 1000.f;
+	float PrevMissileSinceUsed = 1000.f;
+	float JetDustTimer = 0.f;
 };

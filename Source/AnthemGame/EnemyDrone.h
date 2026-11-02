@@ -9,6 +9,7 @@
  * you into the air, so flying off doesn't shake it. Every few seconds its
  * eye charges up and it fires a big slow plasma orb that hits hard but is
  * easy to dodge if you're watching. The glowing eye is the weak spot.
+ * It's light, so hits and blasts push it around, even up and down.
  */
 UCLASS()
 class ANTHEMGAME_API AEnemyDrone : public AJavelinEnemy
@@ -37,6 +38,9 @@ protected:
 	virtual void UpdateFacing(float DeltaSeconds, const AJavelinCharacter* Target) override;
 	virtual void UpdateAnimation(float DeltaSeconds) override;
 
+	/** Shot down, it loses power and drops, spinning and trailing smoke, and blows up when it hits the ground. */
+	virtual void UpdateDeath(float DeltaSeconds) override;
+
 	/** The flat ring around the body. It spins. */
 	UPROPERTY(VisibleAnywhere, Category = "Components|Body")
 	TObjectPtr<USceneComponent> Ring;
@@ -44,4 +48,5 @@ protected:
 private:
 	float AnimTime = 0.f;
 	float BodyPitch = 0.f;
+	float SmokeTimer = 0.f;
 };
