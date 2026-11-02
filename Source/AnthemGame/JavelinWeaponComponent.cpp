@@ -1,5 +1,6 @@
 #include "JavelinWeaponComponent.h"
 #include "Engine/World.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/DamageType.h"
 #include "JavelinCharacter.h"
@@ -11,6 +12,10 @@
 namespace
 {
 	const FName WeakSpotTag(TEXT("WeakSpot"));
+	const FName ArmorPlateTag(TEXT("Paint.Armor"));
+
+	/** A pause this long between shots counts as letting go of the trigger, for recoil climb and recovery. */
+	constexpr float RecoilResetTime = 0.15f;
 }
 
 bool UJavelinWeaponComponent::IsLivingTarget(const AActor* Actor)
@@ -93,6 +98,28 @@ void UJavelinWeaponComponent::TickComponent(float DeltaTime, ELevelTick TickType
 	ShotCooldown = FMath::Max(ShotCooldown, bTriggerHeld ? -TimeBetweenShots : 0.f);
 
 	Bloom = FMath::Max(0.f, Bloom - BloomRecovery * DeltaTime);
+	RecoilKick = FMath::Max(0.f, RecoilKick - DeltaTime * 10.f);
+
+	// Once you stop firing, the view settles back down part of the way the recoil pushed it.
+	if (GetTimeSinceLastShot() > RecoilResetTime)
+	{
+		SustainedShots = 0;
+		if (RecoilToRecover > 0.f)
+		{
+			const APawn* Pawn = Cast<APawn>(GetOwner());
+			if (AController* Controller = Pawn ? Pawn->GetController() : nullptr)
+			{
+				// Ease out: fast at first, gentler as it arrives.
+				const float Step = FMath::Min(RecoilToRecover, FMath::Max(RecoilRecoverySpeed, RecoilToRecover * 5.f) * DeltaTime);
+				Controller->SetControlRotation(Controller->GetControlRotation() - FRotator(Step, 0.f, 0.f));
+				RecoilToRecover -= Step;
+			}
+			else
+			{
+				RecoilToRecover = 0.f;
+			}
+		}
+	}
 
 	const float Now = GetWorld()->GetTimeSeconds();
 	DamageNumbers.RemoveAll([Now](const FJavelinDamageNumber& Number) { return Now - Number.SpawnTime > DamageNumberLifetime; });
@@ -137,23 +164,41 @@ void UJavelinWeaponComponent::FireShot()
 	AActor* HitActor = MuzzleHit.GetActor();
 	if (bHit && HitActor && HitActor->CanBeDamaged())
 	{
-		const bool bWeakSpot = MuzzleHit.GetComponent() && MuzzleHit.GetComponent()->ComponentHasTag(WeakSpotTag);
-		const float ShotDamage = Damage * (bWeakSpot ? WeakSpotMultiplier : 1.f);
+		const UPrimitiveComponent* HitPart = MuzzleHit.GetComponent();
+		const bool bWeakSpot = HitPart && HitPart->ComponentHasTag(WeakSpotTag);
+		const bool bArmorPlate = HitPart && HitPart->ComponentHasTag(ArmorPlateTag);
+
+		// Long shots lose some punch.
+		const double Distance = FVector::Dist(MuzzleLocation, MuzzleHit.ImpactPoint);
+		const float Falloff = FMath::GetMappedRangeValueClamped(FVector2D(FalloffStartRange, FMath::Max(FalloffEndRange, FalloffStartRange + 1.f)),
+			FVector2D(1.f, FalloffMinDamage), Distance);
+		const float ShotDamage = Damage * Falloff * (bWeakSpot ? WeakSpotMultiplier : (bArmorPlate ? ArmorPlateMultiplier : 1.f));
 
 		const bool bWasAlive = IsLivingTarget(HitActor);
 		const float Dealt = UGameplayStatics::ApplyPointDamage(HitActor, ShotDamage, ShotDirection, MuzzleHit, Controller, Pawn, UDamageType::StaticClass());
 		if (Dealt > 0.f)
 		{
 			AddHitFeedback(MuzzleHit.ImpactPoint, Dealt, bWeakSpot, bWasAlive && !IsLivingTarget(HitActor));
+			if (AJavelinEnemy* Enemy = Cast<AJavelinEnemy>(HitActor))
+			{
+				Enemy->ApplyKnockback(ShotDirection * HitImpulse * (bWeakSpot ? 1.5f : 1.f));
+			}
 		}
 	}
 
 	Bloom = FMath::Min(Bloom + SpreadPerShot, MaxBloom);
 
-	// Kick the view up a little. The player pulls it back down.
+	// Kick the view up. Holding the trigger the kick builds, and it drifts a little to one side.
+	// When you let go, most of the climb settles back (see TickComponent); the rest you pull down yourself.
 	const float RecoilScale = IsAiming() ? 0.5f : 1.f;
-	Controller->SetControlRotation(Controller->GetControlRotation()
-		+ FRotator(RecoilPitch * RecoilScale, FMath::FRandRange(-RecoilYaw, RecoilYaw) * RecoilScale, 0.f));
+	const float Climb = 1.f + RecoilClimb * FMath::Min(1.f, static_cast<float>(SustainedShots) / FMath::Max(RecoilClimbShots, 1));
+	const float KickPitch = RecoilPitch * RecoilScale * Climb;
+	const float KickYaw = (RecoilYawDrift + FMath::FRandRange(-RecoilYaw, RecoilYaw)) * RecoilScale;
+	Controller->SetControlRotation(Controller->GetControlRotation() + FRotator(KickPitch, KickYaw, 0.f));
+	RecoilToRecover += KickPitch * RecoilRecovery;
+	++SustainedShots;
+	RecoilKick = 1.f;
+	OnFired.Broadcast();
 
 	// Anthem-style auto reload when the magazine runs dry.
 	if (Ammo == 0)
@@ -275,7 +320,21 @@ float UJavelinWeaponComponent::GetReloadProgress() const
 
 float UJavelinWeaponComponent::GetCurrentSpread() const
 {
-	return (IsAiming() ? AimSpread : HipSpread) + Bloom;
+	float Spread = (IsAiming() ? AimSpread : HipSpread) + Bloom;
+
+	// Shooting on the move or in mid-air is less accurate than standing or hovering still.
+	if (const ACharacter* Character = Cast<ACharacter>(GetOwner()))
+	{
+		const UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
+		const float MoveAlpha = FMath::Clamp(static_cast<float>(Character->GetVelocity().Size2D()) / 1100.f, 0.f, 1.f);
+		float Extra = MovingSpread * MoveAlpha;
+		if (Movement && Movement->IsFalling())
+		{
+			Extra += AirborneSpread;
+		}
+		Spread += Extra * (IsAiming() ? 0.33f : 1.f);
+	}
+	return Spread;
 }
 
 float UJavelinWeaponComponent::GetTimeSinceLastShot() const

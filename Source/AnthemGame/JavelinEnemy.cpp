@@ -1,6 +1,7 @@
 #include "JavelinEnemy.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "DustEffect.h"
 #include "EnemyProjectile.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/DamageEvents.h"
@@ -22,6 +23,13 @@ namespace
 {
 	// The player's gun deals extra damage to parts with this tag.
 	const FName WeakSpotTag(TEXT("WeakSpot"));
+
+	/** How long a toppled body lies there before it sinks away, and how long sinking takes. */
+	constexpr float CorpseTime = 2.5f;
+	constexpr float SinkTime = 1.5f;
+	constexpr float ToppleTime = 0.6f;
+
+	const FLinearColor EnemyDustColor(0.3f, 0.26f, 0.19f);
 }
 
 AJavelinEnemy::AJavelinEnemy()
@@ -133,10 +141,19 @@ void AJavelinEnemy::BeginPlay()
 void AJavelinEnemy::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (bDying)
+	{
+		DeathTime += DeltaSeconds;
+		UpdateDeath(DeltaSeconds);
+		return;
+	}
 	if (!IsAlive())
 	{
 		return;
 	}
+
+	// Take last frame's flinch off, so the animation below starts from its own pose.
+	Body->SetRelativeRotation(BodyRestRotation);
 
 	AJavelinCharacter* Player = Cast<AJavelinCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
 	UpdateSenses(DeltaSeconds, Player);
@@ -150,11 +167,76 @@ void AJavelinEnemy::Tick(float DeltaSeconds)
 		StrafeSign = FMath::RandBool() ? 1.f : -1.f;
 	}
 
+	// Get shoved by hits and blasts, sliding along whatever it's pushed into.
+	if (!KnockbackVelocity.IsNearlyZero(1.f))
+	{
+		MoveWithSliding(KnockbackVelocity * DeltaSeconds);
+		KnockbackVelocity *= FMath::Exp(-5.f * DeltaSeconds);
+	}
+
+	// Staggered, it stumbles instead of walking and can't shoot.
+	StaggerRemaining = FMath::Max(0.f, StaggerRemaining - DeltaSeconds);
+	const float NormalMoveSpeed = MoveSpeed;
+	if (IsStaggered())
+	{
+		MoveSpeed *= 0.15f;
+	}
 	UpdateMovement(DeltaSeconds, Target);
+	MoveSpeed = NormalMoveSpeed;
+
 	UpdateFacing(DeltaSeconds, Target);
-	UpdateAttack(DeltaSeconds, Target);
+	if (!IsStaggered())
+	{
+		UpdateAttack(DeltaSeconds, Target);
+	}
 	UpdateAnimation(DeltaSeconds);
+	BodyRestRotation = Body->GetRelativeRotation();
+	UpdateHitReactions(DeltaSeconds);
 	UpdatePaint(DeltaSeconds);
+}
+
+void AJavelinEnemy::UpdateHitReactions(float DeltaSeconds)
+{
+	RecentDamage = FMath::Max(0.f, RecentDamage - MaxHealth * 0.15f * DeltaSeconds);
+
+	// A stiff spring pulls the body back upright after a hit, overshooting a little like something heavy rocking.
+	const float Step = FMath::Min(DeltaSeconds, 0.05f);
+	FlinchPitchSpeed += (-160.f * FlinchPitch - 14.f * FlinchPitchSpeed) * Step;
+	FlinchRollSpeed += (-160.f * FlinchRoll - 14.f * FlinchRollSpeed) * Step;
+	FlinchPitch = FMath::Clamp(FlinchPitch + FlinchPitchSpeed * Step, -35.f, 35.f);
+	FlinchRoll = FMath::Clamp(FlinchRoll + FlinchRollSpeed * Step, -35.f, 35.f);
+
+	const FQuat Tip = FRotator(FlinchPitch, 0.f, FlinchRoll).Quaternion();
+	Body->SetRelativeRotation((Tip * BodyRestRotation.Quaternion()).Rotator());
+}
+
+void AJavelinEnemy::ApplyKnockback(const FVector& Impulse)
+{
+	FVector Push = Impulse / FMath::Max(Mass, 0.1f);
+	if (bDying)
+	{
+		// A wreck that's already going down gets knocked along as it falls.
+		DeathVelocity += Push;
+		return;
+	}
+	if (!bCanBeKnockedUp)
+	{
+		Push.Z = 0.f;
+	}
+	KnockbackVelocity = (KnockbackVelocity + Push).GetClampedToMaxSize(2500.f);
+}
+
+void AJavelinEnemy::Stagger()
+{
+	// Reeling: the volley it was lining up is cancelled, and it needs a moment before it can shoot again.
+	StaggerRemaining = StaggerTime;
+	RecentDamage = 0.f;
+	bWindingUp = false;
+	ShotsLeftInBurst = 0;
+	AttackTimer = FMath::Max(AttackTimer, StaggerTime + 0.4f);
+	// Reel further the way it was already rocking.
+	FlinchPitchSpeed += FMath::Sign(FlinchPitchSpeed) * 120.f;
+	FlinchRollSpeed += FMath::Sign(FlinchRollSpeed) * 60.f;
 }
 
 bool AJavelinEnemy::CanSee(const AJavelinCharacter* Player) const
@@ -329,10 +411,35 @@ float AJavelinEnemy::TakeDamage(float DamageAmount, FDamageEvent const& DamageEv
 	HitFlash = 1.f;
 	LastHitTime = GetWorld()->GetTimeSeconds();
 
+	// Which way the hit was going, and whether it struck the weak spot.
+	FVector HitDirection = DamageCauser ? (GetActorLocation() - DamageCauser->GetActorLocation()).GetSafeNormal() : -GetActorForwardVector();
+	bool bWeakSpotHit = false;
+	if (DamageEvent.IsOfType(FPointDamageEvent::ClassID))
+	{
+		const FPointDamageEvent& PointDamage = static_cast<const FPointDamageEvent&>(DamageEvent);
+		HitDirection = PointDamage.ShotDirection.GetSafeNormal();
+		const UPrimitiveComponent* HitPart = PointDamage.HitInfo.GetComponent();
+		bWeakSpotHit = HitPart && HitPart->ComponentHasTag(WeakSpotTag);
+	}
+
 	if (!IsAlive())
 	{
+		DeathDirection = HitDirection;
 		Die();
 		return DamageAmount;
+	}
+
+	// Flinch away from the hit: shot from the front it rocks back, from the side it tips over sideways.
+	const FVector LocalHit = GetActorRotation().UnrotateVector(HitDirection);
+	const float Kick = FMath::Min(DamageAmount, 60.f) * FlinchPerDamage / FMath::Max(Mass, 0.1f);
+	FlinchPitchSpeed += -static_cast<float>(LocalHit.X) * Kick;
+	FlinchRollSpeed += static_cast<float>(LocalHit.Y) * Kick;
+
+	// Too much damage at once, or shooting the weak spot while it flares, staggers it and cancels its volley.
+	RecentDamage += DamageAmount;
+	if (RecentDamage >= StaggerDamageFraction * MaxHealth || (bWeakSpotHit && bWindingUp))
+	{
+		Stagger();
 	}
 
 	// Getting shot gives your position away, to this enemy and to its friends nearby.
@@ -353,11 +460,22 @@ void AJavelinEnemy::Die()
 	const FVector Center = Body->GetComponentLocation();
 	if (AShotEffect* Effect = World->SpawnActor<AShotEffect>(Center, FRotator::ZeroRotator))
 	{
-		Effect->InitBurst(Center, WeakSpotColor, 4.f);
+		Effect->InitBurst(Center, WeakSpotColor, 1.5f);
 	}
 
-	SetActorHiddenInGame(true);
+	// The body stays and plays out its death (see UpdateDeath), but nothing can hit it or bump into it any more.
+	bDying = true;
+	DeathTime = 0.f;
+	DeathVelocity = MoveVelocity * 0.5f + KnockbackVelocity + DeathDirection * 250.f;
+	BodyRestRotation = Body->GetRelativeRotation();
 	SetActorEnableCollision(false);
+	SetLifeSpan(10.f);
+
+	// Its power dies: the glow goes out of the weak spots.
+	for (const FJavelinEnemyPaintedPart& Part : PaintedParts)
+	{
+		Part.Material->SetVectorParameterValue(TEXT("Color"), Part.bWeakSpot ? Part.Color * 0.08f : Part.Color * 0.6f);
+	}
 
 	auto Drop = [this, World, &Center](EPickupOrbType Type)
 	{
@@ -376,8 +494,43 @@ void AJavelinEnemy::Die()
 	{
 		Drop(EPickupOrbType::Ammo);
 	}
+}
 
-	Destroy();
+void AJavelinEnemy::UpdateDeath(float DeltaSeconds)
+{
+	// Topple over the way the killing blow pushed, pivoting on the feet, falling faster as it goes like a dead weight.
+	const float HalfHeight = Collision->GetScaledCapsuleHalfHeight();
+	FVector LocalDirection = GetActorRotation().UnrotateVector(DeathDirection);
+	LocalDirection.Z = 0.f;
+	LocalDirection = LocalDirection.IsNearlyZero() ? FVector(-1.f, 0.f, 0.f) : LocalDirection.GetSafeNormal();
+	const FVector Axis = FVector::CrossProduct(FVector::UpVector, LocalDirection).GetSafeNormal();
+
+	const float Alpha = FMath::Clamp(DeathTime / ToppleTime, 0.f, 1.f);
+	const float Eased = Alpha * Alpha;
+	const FQuat Fall(Axis, FMath::DegreesToRadians(85.f * Eased));
+	const FVector Feet(0.f, 0.f, -HalfHeight);
+	FVector Offset = Feet - Fall.RotateVector(Feet) + FVector(0.f, 0.f, 22.f * Eased);
+
+	// It hits the ground with a thud of dust.
+	if (Alpha >= 1.f && !bSankDust)
+	{
+		bSankDust = true;
+		const FVector WorldDirection = GetActorRotation().RotateVector(LocalDirection);
+		ADustEffect::Spawn(GetWorld(), GetActorLocation() + WorldDirection * HalfHeight - FVector(0.f, 0.f, HalfHeight), 110.f, 0.7f, 6, EnemyDustColor, 0.9f);
+	}
+
+	// After lying there a while it sinks into the ground and is gone.
+	if (DeathTime > CorpseTime)
+	{
+		Offset.Z -= 80.f * (DeathTime - CorpseTime) / SinkTime;
+		if (DeathTime > CorpseTime + SinkTime)
+		{
+			Destroy();
+			return;
+		}
+	}
+
+	Body->SetRelativeLocationAndRotation(Offset, Fall * BodyRestRotation.Quaternion());
 }
 
 bool AJavelinEnemy::MoveWithSliding(const FVector& Delta)

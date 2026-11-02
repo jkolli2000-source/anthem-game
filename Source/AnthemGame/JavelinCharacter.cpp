@@ -1,4 +1,5 @@
 #include "JavelinCharacter.h"
+#include "DustEffect.h"
 #include "JavelinAbilityComponent.h"
 #include "JavelinHeatComponent.h"
 #include "JavelinMovementComponent.h"
@@ -9,6 +10,7 @@
 #include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/DamageEvents.h"
+#include "Engine/World.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/StaticMesh.h"
 #include "EnhancedInputComponent.h"
@@ -20,6 +22,7 @@
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "ShotEffect.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -58,6 +61,9 @@ namespace
 
 	/** How long the left arm takes to follow through after throwing a grenade. */
 	constexpr float GrenadeThrowPoseTime = 0.35f;
+
+	/** Ground speed where footsteps start to kick up dust and rumble. */
+	constexpr float HeavyStepSpeed = 800.f;
 
 	const FLinearColor ThrusterIdleColor(0.2f, 0.2f, 0.22f);
 	const FLinearColor ThrusterCoolColor(0.1f, 0.7f, 1.f);
@@ -336,6 +342,11 @@ void AJavelinCharacter::BeginPlay()
 	Abilities->SetLaunchPoints(LeftShoulder, MissileLauncher);
 	MuzzleLight->SetLightColor(MuzzleFlashColor);
 	LastYaw = GetActorRotation().Yaw;
+	LastVelocity = GetVelocity();
+
+	GetJavelinMovement()->OnLanded.AddUObject(this, &AJavelinCharacter::HandleLanded);
+	GetJavelinMovement()->OnCrashed.AddUObject(this, &AJavelinCharacter::HandleCrashed);
+	Weapon->OnFired.AddUObject(this, &AJavelinCharacter::HandleWeaponFired);
 }
 
 void AJavelinCharacter::PawnClientRestart()
@@ -588,7 +599,21 @@ void AJavelinCharacter::LookStickCompleted()
 
 bool AJavelinCharacter::TryStartFlight()
 {
-	return !Heat->IsOverheated() && GetJavelinMovement()->StartFlight();
+	const bool bFromGround = GetJavelinMovement()->IsMovingOnGround();
+	if (Heat->IsOverheated() || !GetJavelinMovement()->StartFlight())
+	{
+		return false;
+	}
+
+	if (bFromGround)
+	{
+		// Blasting off the ground: the jets kick up a ring of dust, the legs push off and everything shakes.
+		ADustEffect::Spawn(GetWorld(), GetFeetLocation(), 220.f, 1.1f, 9, DustColor, 1.1f);
+		AddCameraTrauma(0.3f);
+		PlayRumble(0.6f, 0.25f, true);
+		CameraDip.Speed -= 120.f;
+	}
+	return true;
 }
 
 bool AJavelinCharacter::TryStartHover()
@@ -788,12 +813,46 @@ float AJavelinCharacter::TakeDamage(float DamageAmount, FDamageEvent const& Dama
 
 	// Remember where the hit came from so the HUD can point at it.
 	FVector Source = DamageCauser ? DamageCauser->GetActorLocation() : GetActorLocation();
+	FVector HitDirection = (GetActorLocation() - Source).GetSafeNormal();
 	if (DamageEvent.IsOfType(FPointDamageEvent::ClassID))
 	{
 		const FPointDamageEvent& PointDamage = static_cast<const FPointDamageEvent&>(DamageEvent);
 		Source = GetActorLocation() - PointDamage.ShotDirection * 1000.f;
+		HitDirection = PointDamage.ShotDirection.GetSafeNormal();
 	}
-	return SuitHealth->ApplyDamage(Incoming, Source);
+
+	const bool bHadShields = SuitHealth->GetShields() > 0.f;
+	const float Dealt = SuitHealth->ApplyDamage(Incoming, Source);
+	if (Dealt <= 0.f)
+	{
+		return 0.f;
+	}
+
+	// Feel the hit: the camera jolts, the torso snaps away from it, and the suit gets shoved a little.
+	// Hits that get through to armor land harder than ones the shields soak.
+	const bool bArmorHit = SuitHealth->GetShields() <= 0.f;
+	const float Weight = FMath::Clamp(Dealt / 40.f, 0.15f, 1.f) * (bArmorHit ? 1.3f : 1.f);
+	AddCameraTrauma(0.12f + 0.25f * Weight);
+	PlayRumble(0.3f + 0.4f * Weight, 0.15f, bArmorHit);
+
+	// Hit from the front leans the torso back, hit from behind pitches it forward.
+	const float FrontBack = static_cast<float>(FVector::DotProduct(HitDirection, GetActorForwardVector()));
+	HitFlinch.Speed += -FrontBack * 260.f * Weight;
+
+	FVector Push = HitDirection * FMath::Min(Dealt * HitKnockbackPerDamage, 450.f);
+	Push.Z = 0.f;
+	if (!IsSuitDown())
+	{
+		GetJavelinMovement()->AddImpulse(Push, true);
+	}
+
+	if (bHadShields && SuitHealth->GetShields() <= 0.f)
+	{
+		// Shields breaking is a jolt of its own.
+		AddCameraTrauma(0.3f);
+		PlayRumble(0.8f, 0.3f, true);
+	}
+	return Dealt;
 }
 
 void AJavelinCharacter::HandleSuitDown()
@@ -834,8 +893,164 @@ void AJavelinCharacter::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	UpdateCombatFacing();
 	UpdateMuzzleFlash();
+	CheckGearUsed();
+	UpdateJetDust(DeltaSeconds);
+	UpdateFeelSprings(DeltaSeconds);
 	UpdateCamera(DeltaSeconds);
 	UpdateVisuals(DeltaSeconds);
+}
+
+FVector AJavelinCharacter::GetFeetLocation() const
+{
+	return GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+}
+
+void AJavelinCharacter::AddCameraTrauma(float Amount)
+{
+	CameraTrauma = FMath::Clamp(CameraTrauma + Amount, 0.f, 1.f);
+}
+
+void AJavelinCharacter::PlayRumble(float Intensity, float Duration, bool bHeavy)
+{
+	APlayerController* PlayerController = Cast<APlayerController>(Controller);
+	if (!bGamepadRumble || !PlayerController || Intensity <= 0.f || Duration <= 0.f)
+	{
+		return;
+	}
+	// The big motors give the deep thump, the small ones the buzz.
+	PlayerController->PlayDynamicForceFeedback(FMath::Clamp(Intensity * RumbleScale, 0.f, 1.f), Duration, bHeavy, true, bHeavy, true);
+}
+
+void AJavelinCharacter::UpdateFeelSprings(float DeltaSeconds)
+{
+	LandingCrouch.Update(DeltaSeconds, 70.f, 11.f);
+	CameraDip.Update(DeltaSeconds, 90.f, 12.f);
+	CameraKick.Update(DeltaSeconds, 250.f, 30.f);
+	HitFlinch.Update(DeltaSeconds, 220.f, 18.f);
+}
+
+void AJavelinCharacter::HandleLanded(const FVector& ImpactVelocity, bool bFromFlight)
+{
+	// Landing out of flight at a shallow angle still slams down, so forward speed counts for some of the impact.
+	const float FallSpeed = FMath::Max(0.f, static_cast<float>(-ImpactVelocity.Z));
+	const float ImpactSpeed = bFromFlight ? FMath::Max(FallSpeed, static_cast<float>(ImpactVelocity.Size()) * 0.5f) : FallSpeed;
+	const float Strength = FMath::GetMappedRangeValueClamped(FVector2D(SoftLandingSpeed, HeavyLandingSpeed), FVector2D(0.f, 1.f), static_cast<double>(ImpactSpeed));
+	if (ImpactSpeed < SoftLandingSpeed)
+	{
+		// A hop: just a little give in the knees.
+		LandingCrouch.Speed += 1.5f;
+		CameraDip.Speed -= 30.f;
+		return;
+	}
+
+	// Knees absorb the weight, the camera dips and bounces back, and a hard one shakes the ground.
+	LandingCrouch.Speed += 4.f + 11.f * Strength;
+	CameraDip.Speed -= 80.f + 280.f * Strength;
+	AddCameraTrauma(0.12f + 0.5f * Strength);
+	PlayRumble(0.25f + 0.75f * Strength, 0.12f + 0.25f * Strength, Strength > 0.35f);
+
+	if (Strength > 0.2f)
+	{
+		ADustEffect::Spawn(GetWorld(), GetFeetLocation(), 120.f + 260.f * Strength, 0.6f + 0.9f * Strength,
+			FMath::RoundToInt(5.f + 5.f * Strength), DustColor, 0.7f + 0.6f * Strength);
+	}
+}
+
+void AJavelinCharacter::HandleCrashed(const FVector& ImpactVelocity, const FVector& ImpactPoint)
+{
+	// Slamming into a wall at flight speed: sparks and rock dust where you hit, and a big jolt.
+	if (AShotEffect* Sparks = GetWorld()->SpawnActor<AShotEffect>(ImpactPoint, FRotator::ZeroRotator))
+	{
+		Sparks->InitBurst(ImpactPoint, FLinearColor(1.f, 0.7f, 0.35f), 2.f);
+	}
+	ADustEffect::Spawn(GetWorld(), ImpactPoint, 150.f, 1.f, 8, DustColor * 1.2f, 1.f);
+	AddCameraTrauma(0.9f);
+	PlayRumble(1.f, 0.45f, true);
+	HitFlinch.Speed += 450.f;
+}
+
+void AJavelinCharacter::HandleWeaponFired()
+{
+	// Each shot punches the camera up a touch (on top of the real recoil the gun adds to your aim) and buzzes the pad.
+	const bool bAiming = Weapon->IsAiming();
+	CameraKick.Speed += bAiming ? 22.f : 38.f;
+	AddCameraTrauma(bAiming ? 0.03f : 0.05f);
+	PlayRumble(0.2f, 0.05f, false);
+}
+
+void AJavelinCharacter::HandleFootstep(int32 Side, float Weight)
+{
+	// Every step is a thump: a little camera bob and some give in the knees. Sprinting stomps harder and kicks up dust.
+	CameraDip.Speed -= 18.f * Weight;
+	LandingCrouch.Speed += 0.35f * Weight;
+
+	if (GetVelocity().Size2D() >= HeavyStepSpeed)
+	{
+		AddCameraTrauma(0.025f);
+		PlayRumble(0.15f, 0.06f, true);
+		const USceneComponent* Knee = Side == 0 ? LeftKnee : RightKnee;
+		const FVector Foot(Knee->GetComponentLocation().X, Knee->GetComponentLocation().Y, GetFeetLocation().Z);
+		ADustEffect::Spawn(GetWorld(), Foot, 30.f, 0.35f, 3, DustColor, 0.6f);
+	}
+}
+
+void AJavelinCharacter::CheckGearUsed()
+{
+	// Gear going off has some kick to it: a grenade throw is light, the missile pod firing is a heavier thud.
+	const float GrenadeSince = Abilities->GetTimeSinceUsed(EJavelinGear::Grenade);
+	const float MissileSince = Abilities->GetTimeSinceUsed(EJavelinGear::Missiles);
+	if (GrenadeSince < PrevGrenadeSinceUsed)
+	{
+		AddCameraTrauma(0.1f);
+		PlayRumble(0.3f, 0.1f, false);
+	}
+	if (MissileSince < PrevMissileSinceUsed)
+	{
+		AddCameraTrauma(0.22f);
+		PlayRumble(0.55f, 0.2f, true);
+		CameraKick.Speed += 40.f;
+	}
+	PrevGrenadeSinceUsed = GrenadeSince;
+	PrevMissileSinceUsed = MissileSince;
+}
+
+void AJavelinCharacter::UpdateJetDust(float DeltaSeconds)
+{
+	// Hovering low, or flying fast and low, the jets blow dust off the ground under you.
+	const UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
+	const bool bFastLowFlight = JavelinMovement->IsInFlight() && GetVelocity().Size() > JavelinMovement->FlightCruiseSpeed * 0.8f;
+	if (!JavelinMovement->IsHovering() && !bFastLowFlight)
+	{
+		JetDustTimer = 0.f;
+		return;
+	}
+
+	JetDustTimer -= DeltaSeconds;
+	if (JetDustTimer > 0.f)
+	{
+		return;
+	}
+	JetDustTimer = JavelinMovement->IsHovering() ? 0.12f : 0.06f;
+
+	const FVector Start = GetActorLocation();
+	const float MaxHeight = JavelinMovement->IsHovering() ? JetDustHeight : JetDustHeight * 0.6f;
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(JetDust), false, this);
+	if (!GetWorld()->LineTraceSingleByObjectType(Hit, Start, Start - FVector(0.f, 0.f, MaxHeight), FCollisionObjectQueryParams(ECC_WorldStatic), Params))
+	{
+		return;
+	}
+
+	const float Closeness = 1.f - Hit.Distance / MaxHeight;
+	if (JavelinMovement->IsHovering())
+	{
+		ADustEffect::Spawn(GetWorld(), Hit.ImpactPoint, 60.f + 140.f * Closeness, 0.3f + 0.45f * Closeness, 5, DustColor, 0.7f);
+	}
+	else
+	{
+		// A wake of dust streaming out behind you.
+		ADustEffect::Spawn(GetWorld(), Hit.ImpactPoint, 80.f * Closeness, 0.4f + 0.6f * Closeness, 3, DustColor, 0.9f);
+	}
 }
 
 void AJavelinCharacter::UpdateCamera(float DeltaSeconds)
@@ -878,6 +1093,26 @@ void AJavelinCharacter::UpdateCamera(float DeltaSeconds)
 	// Backed up against a wall the camera ends up inside the suit; hide it rather than show its insides.
 	const float CameraDistance = FVector::Dist(FollowCamera->GetComponentLocation(), CameraBoom->GetComponentLocation());
 	VisualRoot->SetHiddenInGame(CameraDistance < HideSuitCameraDistance, true);
+
+	// Camera shake. Trauma fades over time; squaring it keeps small bumps subtle and big hits violent.
+	// Fast flight adds a steady buffet on top.
+	CameraTrauma = FMath::Max(0.f, CameraTrauma - ShakeDecay * DeltaSeconds);
+	float Buffet = 0.f;
+	if (JavelinMovement->IsInFlight())
+	{
+		Buffet = FlightBuffet * FMath::GetMappedRangeValueClamped(
+			FVector2D(JavelinMovement->FlightCruiseSpeed, JavelinMovement->FlightBoostSpeed + JavelinMovement->DiveSpeedBonus), FVector2D(0.3f, 1.f), GetVelocity().Size());
+	}
+	const float Shake = FMath::Min(1.f, FMath::Square(CameraTrauma) + Buffet) * CameraShakeScale;
+	ShakeTime += DeltaSeconds * ShakeFrequency;
+	const FRotator ShakeRotation(
+		MaxShakeAngles.Pitch * Shake * FMath::PerlinNoise1D(ShakeTime) + CameraKick.Value * CameraShakeScale,
+		MaxShakeAngles.Yaw * Shake * FMath::PerlinNoise1D(ShakeTime + 31.7f),
+		MaxShakeAngles.Roll * Shake * FMath::PerlinNoise1D(ShakeTime + 73.1f));
+	FollowCamera->SetRelativeRotation(ShakeRotation);
+
+	// Landings and footsteps bounce the camera's pivot.
+	CameraBoom->SetRelativeLocation(FVector(0.f, 0.f, CameraPivotHeight + CameraDip.Value * CameraShakeScale));
 }
 
 void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
@@ -888,13 +1123,27 @@ void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
 	const float YawRate = FMath::FindDeltaAngleDegrees(LastYaw, Yaw) / FMath::Max(DeltaSeconds, KINDA_SMALL_NUMBER);
 	LastYaw = Yaw;
 
-	// In flight the suit lies along its velocity (back up, head forward) and banks into turns.
+	// How the suit is speeding up or slowing down, smoothed so it reads as weight shifting rather than jitter.
+	const FVector SuitVelocity = GetVelocity();
+	const FVector SuitAcceleration = (SuitVelocity - LastVelocity) / FMath::Max(DeltaSeconds, KINDA_SMALL_NUMBER);
+	LastVelocity = SuitVelocity;
+	SmoothedAcceleration = FMath::VInterpTo(SmoothedAcceleration, SuitAcceleration.GetClampedToMaxSize(5000.f), DeltaSeconds, 6.f);
+
 	float TargetPitch = 0.f;
 	float TargetRoll = 0.f;
 	if (JavelinMovement->IsInFlight())
 	{
-		TargetPitch = -90.f + GetVelocity().Rotation().Pitch;
+		// Lie along the heading (back up, head forward) and bank into turns. In a hard turn the velocity
+		// drifts off the heading, so you see the suit slide.
+		TargetPitch = -90.f + JavelinMovement->GetFlightHeading().Rotation().Pitch;
 		TargetRoll = FMath::Clamp(YawRate * FlightBankFactor, -MaxFlightBank, MaxFlightBank);
+	}
+	else if (JavelinMovement->IsMovingOnGround() && !IsSuitDown())
+	{
+		// A heavy suit leans into speeding up and turning, and rocks back when it brakes.
+		const FVector LocalAccel = GetActorRotation().UnrotateVector(SmoothedAcceleration) / 100.f;
+		TargetPitch = FMath::Clamp(static_cast<float>(-LocalAccel.X) * GroundLeanFactor, -MaxGroundLean, MaxGroundLean);
+		TargetRoll = FMath::Clamp(static_cast<float>(LocalAccel.Y) * GroundLeanFactor, -MaxGroundLean, MaxGroundLean);
 	}
 
 	VisualPitch = FMath::FInterpTo(VisualPitch, TargetPitch, DeltaSeconds, VisualTiltSpeed);
@@ -922,7 +1171,39 @@ void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
 		Blend(CurrentPose.HipPitch[Side], Target.HipPitch[Side]);
 		Blend(CurrentPose.KneeBend[Side], Target.KneeBend[Side]);
 	}
-	ApplyPose(CurrentPose);
+
+	// Quick reactions go on top of the blended pose so they snap instead of easing in.
+	FJavelinSuitPose FinalPose = CurrentPose;
+	if (!JavelinMovement->IsInFlight())
+	{
+		// Landing crouch: hips drop, knees fold, torso tips forward and arms come out for balance.
+		const float Crouch = FMath::Clamp(LandingCrouch.Value, -0.1f, 1.2f);
+		FinalPose.BodyBob -= 32.f * Crouch;
+		FinalPose.TorsoPitch -= 18.f * Crouch;
+		FinalPose.HeadPitch += 12.f * Crouch;
+		FinalPose.ShoulderSpread += 12.f * Crouch;
+		for (int32 Side = 0; Side < 2; ++Side)
+		{
+			FinalPose.HipPitch[Side] += 50.f * Crouch;
+			FinalPose.KneeBend[Side] -= 85.f * Crouch;
+		}
+	}
+
+	// Taking a hit snaps the torso and head.
+	FinalPose.TorsoPitch += HitFlinch.Value;
+	FinalPose.HeadPitch += HitFlinch.Value * 0.6f;
+
+	// Recoil kicks the gun arm up and back, and the support arm with it.
+	if (IsInCombatStance())
+	{
+		const float Kick = Weapon->GetRecoilKick();
+		FinalPose.ShoulderPitch[1] += 7.f * Kick;
+		FinalPose.ElbowBend[1] += 10.f * Kick;
+		FinalPose.ShoulderPitch[0] += 5.f * Kick;
+		FinalPose.ElbowBend[0] += 6.f * Kick;
+		FinalPose.TorsoPitch += 1.5f * Kick;
+	}
+	ApplyPose(FinalPose);
 
 	// Thrusters glow blue when active and shift to red as heat builds.
 	if (ThrusterMaterial)
@@ -1009,7 +1290,22 @@ FJavelinSuitPose AJavelinCharacter::ComputeTargetPose(float DeltaSeconds)
 			// Walk cycle driven by ground speed, so feet roughly match the distance covered.
 			const float Speed = GetVelocity().Size2D();
 			const float Stride = FMath::Clamp(Speed / FMath::Max(JavelinMovement->MaxWalkSpeed, 1.f), 0.f, 1.4f);
-			WalkPhase = FMath::Fmod(WalkPhase + DeltaSeconds * UE_TWO_PI * Speed / FMath::Max(WalkStrideLength, 1.f), UE_TWO_PI);
+			const float OldPhase = WalkPhase;
+			const float NewPhase = OldPhase + DeltaSeconds * UE_TWO_PI * Speed / FMath::Max(WalkStrideLength, 1.f);
+
+			// A foot plants as it finishes its swing: the left at a quarter of the cycle, the right at three quarters.
+			if (Speed > 60.f)
+			{
+				const float Plants[3] = { UE_HALF_PI, UE_PI + UE_HALF_PI, UE_TWO_PI + UE_HALF_PI };
+				for (int32 Index = 0; Index < 3; ++Index)
+				{
+					if (OldPhase < Plants[Index] && NewPhase >= Plants[Index])
+					{
+						HandleFootstep(Index == 1 ? 1 : 0, Stride);
+					}
+				}
+			}
+			WalkPhase = FMath::Fmod(NewPhase, UE_TWO_PI);
 			const float Swing = FMath::Sin(WalkPhase);
 			const float Breath = FMath::Sin(AnimTime * 1.6f);
 
