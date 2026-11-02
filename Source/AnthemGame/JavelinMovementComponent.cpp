@@ -3,11 +3,14 @@
 
 UJavelinMovementComponent::UJavelinMovementComponent()
 {
-	// A heavy suit: it takes a moment to get up to speed and to stop, and turns with some weight.
-	MaxWalkSpeed = 600.f;
-	MaxAcceleration = 1600.f;
-	BrakingDecelerationWalking = 1500.f;
-	GroundFriction = 6.f;
+	// A heavy suit: a strong first push-off, then it winds up to speed, stops over a short skid and turns with weight.
+	// Acceleration and turning change with speed: see GetMaxAcceleration, TickComponent and CalcVelocity.
+	MaxWalkSpeed = 520.f;
+	MaxAcceleration = 2800.f;
+	BrakingDecelerationWalking = 2000.f;
+	GroundFriction = 8.f;
+	bUseSeparateBrakingFriction = true;
+	BrakingFriction = 3.f;
 	// Heavier gravity with a stronger jump: about the same height as before, but it falls like it weighs a ton.
 	JumpZVelocity = 820.f;
 	AirControl = 0.6f;
@@ -20,11 +23,57 @@ void UJavelinMovementComponent::TickComponent(float DeltaTime, ELevelTick TickTy
 {
 	LandingRecoveryRemaining = FMath::Max(0.f, LandingRecoveryRemaining - DeltaTime);
 	LandingSkidRemaining = FMath::Max(0.f, LandingSkidRemaining - DeltaTime);
+	DodgeCooldownRemaining = FMath::Max(0.f, DodgeCooldownRemaining - DeltaTime);
+
+	// The suit can't spin on a dime: the faster it goes, the slower it turns to face where it's heading.
+	// Facing the crosshair (aiming or shooting) stays quick so aiming feels responsive. Hover turns on its own.
+	const float TurnSpeedAlpha = FMath::Clamp(static_cast<float>(Velocity.Size2D()) / FMath::Max(SprintSpeed, 1.f), 0.f, 1.f);
+	RotationRate.Yaw = bUseControllerDesiredRotation ? CombatTurnRate : FMath::Lerp(GroundTurnRateSlow, GroundTurnRateFast, TurnSpeedAlpha);
+	if (DodgeRemaining > 0.f)
+	{
+		DodgeRemaining = FMath::Max(0.f, DodgeRemaining - DeltaTime);
+		// Dodging into flight (or anything but ground, falling and hover) ends it.
+		if (IsInFlight())
+		{
+			DodgeRemaining = 0.f;
+		}
+	}
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 }
 
 void UJavelinMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration)
 {
+	// A dodge drives the horizontal speed itself: a hard burst that eases off toward the end.
+	if (DodgeRemaining > 0.f && !IsInFlight())
+	{
+		const float Progress = GetDodgeProgress();
+		const float Ease = 1.f - FMath::Square(1.f - Progress);
+		const float Speed = DodgeSpeed * FMath::Lerp(1.f, DodgeEndSpeedFraction, Ease);
+		Velocity.X = DodgeDirection.X * Speed;
+		Velocity.Y = DodgeDirection.Y * Speed;
+		return;
+	}
+
+	if (IsMovingOnGround())
+	{
+		// The faster the suit goes, the less grip it has to bend its path, so fast turns are wide and heavy.
+		const float SpeedAlpha = FMath::Clamp(static_cast<float>(Velocity.Size2D()) / FMath::Max(SprintSpeed, 1.f), 0.f, 1.f);
+		Friction = FMath::Lerp(GroundTurnGripSlow, GroundTurnGripFast, SpeedAlpha);
+
+		// Pushing against the way you're going: plant the feet and brake before heading the other way.
+		const FVector Flat(Velocity.X, Velocity.Y, 0.f);
+		if (!Acceleration.IsNearlyZero() && !Flat.IsNearlyZero())
+		{
+			const FVector MoveDirection = Flat.GetSafeNormal();
+			const float Against = -static_cast<float>(FVector::DotProduct(MoveDirection, Acceleration.GetSafeNormal()));
+			if (Against > 0.2f)
+			{
+				const float Brake = FMath::Min(GroundReverseBraking * Against * DeltaTime, static_cast<float>(Flat.Size()));
+				Velocity -= MoveDirection * Brake;
+			}
+		}
+	}
+
 	// Landing fast, the feet skid along the ground before they grip.
 	if (LandingSkidRemaining > 0.f && IsMovingOnGround())
 	{
@@ -32,6 +81,42 @@ void UJavelinMovementComponent::CalcVelocity(float DeltaTime, float Friction, bo
 		BrakingDeceleration *= 0.3f;
 	}
 	Super::CalcVelocity(DeltaTime, Friction, bFluid, BrakingDeceleration);
+}
+
+float UJavelinMovementComponent::GetMaxAcceleration() const
+{
+	if (!IsMovingOnGround())
+	{
+		return Super::GetMaxAcceleration();
+	}
+	// Strong from a standstill so the suit answers right away, weaker near top speed so it winds up like something heavy.
+	const float SpeedAlpha = FMath::Clamp(static_cast<float>(Velocity.Size2D()) / FMath::Max(SprintSpeed, 1.f), 0.f, 1.f);
+	return FMath::Lerp(GroundStartAcceleration, GroundTopAcceleration, SpeedAlpha);
+}
+
+bool UJavelinMovementComponent::CanDodge() const
+{
+	if (!CharacterOwner || !UpdatedComponent || DodgeRemaining > 0.f || DodgeCooldownRemaining > 0.f)
+	{
+		return false;
+	}
+	return IsMovingOnGround() || (bCanDodgeWhileHovering && IsHovering());
+}
+
+bool UJavelinMovementComponent::StartDodge(const FVector& Direction)
+{
+	FVector Flat(Direction.X, Direction.Y, 0.f);
+	if (!CanDodge() || !Flat.Normalize())
+	{
+		return false;
+	}
+	DodgeDirection = Flat;
+	DodgeRemaining = DodgeDuration;
+	DodgeCooldownRemaining = DodgeCooldown;
+	// A dodge cancels a landing slowdown or skid: the jets take over.
+	LandingRecoveryRemaining = 0.f;
+	LandingSkidRemaining = 0.f;
+	return true;
 }
 
 void UJavelinMovementComponent::OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode)
@@ -124,6 +209,11 @@ void UJavelinMovementComponent::StopFlightOrHover()
 
 float UJavelinMovementComponent::GetMaxSpeed() const
 {
+	if (DodgeRemaining > 0.f && !IsInFlight())
+	{
+		return DodgeSpeed;
+	}
+
 	switch (GetJavelinMode())
 	{
 	case EJavelinMoveMode::Flight:

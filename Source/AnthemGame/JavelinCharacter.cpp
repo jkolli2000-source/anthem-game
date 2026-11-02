@@ -62,8 +62,58 @@ namespace
 	/** How long the left arm takes to follow through after throwing a grenade. */
 	constexpr float GrenadeThrowPoseTime = 0.35f;
 
-	/** Ground speed where footsteps start to kick up dust and rumble. */
+	/** Ground speed where footsteps start to kick up dust and rumble harder. */
 	constexpr float HeavyStepSpeed = 800.f;
+
+	// Leg measurements, in the suit's local space. Hips hang off VisualRoot; the capsule's feet are at Z = -96.
+	constexpr float HipWidth = 19.f;
+	constexpr float HipHeight = -14.f;
+	constexpr float ThighLength = 40.f;
+	constexpr float ShinLength = 34.f;
+	/** Ankle pivot height above the sole. */
+	constexpr float AnkleHeight = 8.f;
+	/** Feet rest a little wider than the hips, toes turned out a touch. */
+	constexpr float FootRestWidth = 23.f;
+	constexpr float FootRestForward = 2.f;
+	constexpr float FootToeOut = 6.f;
+	/** Planted feet closer than this to their rest spot don't need a settling step. */
+	constexpr float SettleDistance = 9.f;
+	constexpr float SettleYaw = 14.f;
+
+	/**
+	 * Two-bone leg IK. Delta goes from the hip to where the ankle should be, in the hip's parent space.
+	 * The hip rolls the leg sideways toward the foot, then pitches it forward or back; the knee only bends backward.
+	 */
+	void SolveLeg(const FVector& Delta, FQuat& OutHip, FQuat& OutKnee)
+	{
+		const float Y = static_cast<float>(Delta.Y);
+		const float Down = FMath::Max(static_cast<float>(-Delta.Z), 1.f);
+		// Negative roll swings a hanging limb toward +Y.
+		const float Roll = FMath::RadiansToDegrees(FMath::Atan2(-Y, Down));
+		const float InPlaneDown = FMath::Sqrt(Y * Y + Down * Down);
+		const float Forward = static_cast<float>(Delta.X);
+
+		const float Reach = FMath::Clamp(FMath::Sqrt(Forward * Forward + InPlaneDown * InPlaneDown),
+			FMath::Abs(ThighLength - ShinLength) + 2.f, ThighLength + ShinLength - 0.1f);
+		const float ToFoot = FMath::Atan2(Forward, InPlaneDown);
+		const float HipAngle = FMath::Acos(FMath::Clamp(
+			(ThighLength * ThighLength + Reach * Reach - ShinLength * ShinLength) / (2.f * ThighLength * Reach), -1.f, 1.f));
+		const float KneeAngle = FMath::Acos(FMath::Clamp(
+			(ThighLength * ThighLength + ShinLength * ShinLength - Reach * Reach) / (2.f * ThighLength * ShinLength), -1.f, 1.f));
+
+		// Positive pitch swings a hanging limb forward. The thigh points ahead of the foot so the knee bends forward.
+		const float HipPitch = FMath::RadiansToDegrees(ToFoot + HipAngle);
+		const float KneeBend = -FMath::RadiansToDegrees(UE_PI - KneeAngle);
+		OutHip = FRotator(0.f, 0.f, Roll).Quaternion() * FRotator(HipPitch, 0.f, 0.f).Quaternion();
+		OutKnee = FRotator(KneeBend, 0.f, 0.f).Quaternion();
+	}
+
+	/** True if a phase running from Old forward by Advance (less than a full cycle) passed Mark. */
+	bool PhaseCrossed(float Old, float Advance, float Mark)
+	{
+		const float Ahead = FMath::Frac(Mark - Old);
+		return Advance > 0.f && Ahead < Advance;
+	}
 
 	const FLinearColor ThrusterIdleColor(0.2f, 0.2f, 0.22f);
 	const FLinearColor ThrusterCoolColor(0.1f, 0.7f, 1.f);
@@ -218,22 +268,25 @@ void AJavelinCharacter::BuildSuit()
 		}
 
 		// Leg: hip > knee > foot
-		USceneComponent* Hip = CreatePivot(PartName(TEXT("Hip")), VisualRoot, FVector(0.f, 19.f * S, -14.f));
+		USceneComponent* Hip = CreatePivot(PartName(TEXT("Hip")), VisualRoot, FVector(0.f, HipWidth * S, HipHeight));
 		CreatePart(PartName(TEXT("Thigh")), Hip, Cube, FVector(0.f, 0.f, -20.f), FVector(0.26f, 0.24f, 0.4f), PaintPrimary);
 		CreatePart(PartName(TEXT("ThighPlate")), Hip, Cube, FVector(0.f, 13.f * S, -16.f), FVector(0.2f, 0.04f, 0.28f), PaintTrim);
 
-		USceneComponent* Knee = CreatePivot(PartName(TEXT("Knee")), Hip, FVector(0.f, 0.f, -40.f));
+		USceneComponent* Knee = CreatePivot(PartName(TEXT("Knee")), Hip, FVector(0.f, 0.f, -ThighLength));
 		CreatePart(PartName(TEXT("KneePad")), Knee, Sphere, FVector(12.f, 0.f, 1.f), FVector(0.17f, 0.18f, 0.18f), PaintSecondary);
 		CreatePart(PartName(TEXT("Shin")), Knee, Cube, FVector(0.f, 0.f, -19.f), FVector(0.24f, 0.22f, 0.36f), PaintSecondary);
 		CreatePart(PartName(TEXT("CalfJet")), Knee, Cylinder, FVector(-13.f, 0.f, -22.f), FVector(0.12f, 0.12f, 0.2f), PaintFrame);
-		CreatePart(PartName(TEXT("Foot")), Knee, Cube, FVector(7.f, 0.f, -37.f), FVector(0.34f, 0.2f, 0.1f), PaintFrame);
-		CreatePart(PartName(TEXT("SoleGlow")), Knee, Cylinder, FVector(-2.f, 0.f, -42.f), FVector(0.12f, 0.12f, 0.01f), PaintGlow);
-		FootFlames.Add(CreateFlame(PartName(TEXT("FootFlame")), Knee, Cone, FVector(-2.f, 0.f, -42.5f), 0.11f));
+		// The ankle lets the foot sit flat on the ground while the leg swings over it. The sole is AnkleHeight below it.
+		USceneComponent* Ankle = CreatePivot(PartName(TEXT("Ankle")), Knee, FVector(0.f, 0.f, -ShinLength));
+		CreatePart(PartName(TEXT("Foot")), Ankle, Cube, FVector(7.f, 0.f, -3.f), FVector(0.34f, 0.2f, 0.1f), PaintFrame);
+		CreatePart(PartName(TEXT("SoleGlow")), Ankle, Cylinder, FVector(-2.f, 0.f, -8.f), FVector(0.12f, 0.12f, 0.01f), PaintGlow);
+		FootFlames.Add(CreateFlame(PartName(TEXT("FootFlame")), Ankle, Cone, FVector(-2.f, 0.f, -8.5f), 0.11f));
 
 		(Side == 0 ? LeftShoulder : RightShoulder) = Shoulder;
 		(Side == 0 ? LeftElbow : RightElbow) = Elbow;
 		(Side == 0 ? LeftHip : RightHip) = Hip;
 		(Side == 0 ? LeftKnee : RightKnee) = Knee;
+		(Side == 0 ? LeftAnkle : RightAnkle) = Ankle;
 	}
 }
 
@@ -384,6 +437,8 @@ void AJavelinCharacter::CreateDefaultInput()
 	LookStickAction = MakeAction(TEXT("IA_LookStick"), EInputActionValueType::Axis2D);
 	JumpAction = MakeAction(TEXT("IA_Jump"), EInputActionValueType::Boolean);
 	ThrustAction = MakeAction(TEXT("IA_Thrust"), EInputActionValueType::Boolean);
+	ThrustToggleAction = MakeAction(TEXT("IA_ThrustToggle"), EInputActionValueType::Boolean);
+	DodgeAction = MakeAction(TEXT("IA_Dodge"), EInputActionValueType::Boolean);
 	LaunchAction = MakeAction(TEXT("IA_Launch"), EInputActionValueType::Boolean);
 	FireAction = MakeAction(TEXT("IA_Fire"), EInputActionValueType::Boolean);
 	AimAction = MakeAction(TEXT("IA_Aim"), EInputActionValueType::Boolean);
@@ -428,7 +483,10 @@ void AJavelinCharacter::CreateDefaultInput()
 	Map(JumpAction, EKeys::SpaceBar);
 	Map(JumpAction, EKeys::Gamepad_FaceButton_Bottom);
 	Map(ThrustAction, EKeys::LeftShift);
-	Map(ThrustAction, EKeys::Gamepad_LeftThumbstick);
+	Map(ThrustToggleAction, EKeys::Gamepad_LeftThumbstick);
+	Map(DodgeAction, EKeys::LeftControl);
+	Map(DodgeAction, EKeys::C);
+	Map(DodgeAction, EKeys::Gamepad_FaceButton_Right);
 	Map(LaunchAction, EKeys::F);
 	Map(LaunchAction, EKeys::Gamepad_FaceButton_Top);
 	Map(FireAction, EKeys::LeftMouseButton);
@@ -481,6 +539,14 @@ void AJavelinCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 		Input->BindAction(ThrustAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnThrustPressed);
 		Input->BindAction(ThrustAction, ETriggerEvent::Completed, this, &AJavelinCharacter::OnThrustReleased);
 	}
+	if (ThrustToggleAction)
+	{
+		Input->BindAction(ThrustToggleAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnThrustTogglePressed);
+	}
+	if (DodgeAction)
+	{
+		Input->BindAction(DodgeAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnDodgePressed);
+	}
 	if (LaunchAction)
 	{
 		Input->BindAction(LaunchAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnLaunchPressed);
@@ -528,11 +594,20 @@ void AJavelinCharacter::Move(const FInputActionValue& Value)
 	const FRotationMatrix Basis(YawRotation);
 	AddMovementInput(Basis.GetUnitAxis(EAxis::X), Axis.Y);
 	AddMovementInput(Basis.GetUnitAxis(EAxis::Y), Axis.X);
+	LastMoveInput = Basis.GetUnitAxis(EAxis::X) * Axis.Y + Basis.GetUnitAxis(EAxis::Y) * Axis.X;
 }
 
 void AJavelinCharacter::MoveCompleted()
 {
 	GetJavelinMovement()->SetFlightInput(FVector2D::ZeroVector);
+	LastMoveInput = FVector::ZeroVector;
+
+	// A sprint switched on with the gamepad stick ends when you let go of the stick, like in Anthem.
+	if (bSprintToggled)
+	{
+		bSprintToggled = false;
+		GetJavelinMovement()->SetSprinting(false);
+	}
 }
 
 void AJavelinCharacter::Look(const FInputActionValue& Value)
@@ -677,7 +752,95 @@ void AJavelinCharacter::OnThrustPressed()
 
 void AJavelinCharacter::OnThrustReleased()
 {
+	bSprintToggled = false;
 	GetJavelinMovement()->SetSprinting(false);
+}
+
+void AJavelinCharacter::OnThrustTogglePressed()
+{
+	if (IsSuitDown())
+	{
+		return;
+	}
+	// Holding a stick click down is tiring, so on a gamepad a click switches sprint on and another click (or
+	// letting go of the stick) switches it off. In the air it works like Shift: fly, or stop flying.
+	UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
+	if (JavelinMovement->IsMovingOnGround())
+	{
+		bSprintToggled = !JavelinMovement->WantsToSprint();
+		JavelinMovement->SetSprinting(bSprintToggled);
+	}
+	else
+	{
+		OnThrustPressed();
+	}
+}
+
+void AJavelinCharacter::OnDodgePressed()
+{
+	UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
+	if (IsSuitDown() || !JavelinMovement->CanDodge())
+	{
+		return;
+	}
+
+	// Dodge the way you're pushing. With no input, hop backward away from whatever you're facing down.
+	FVector Direction = LastMoveInput;
+	Direction.Z = 0.f;
+	if (Direction.SizeSquared() < 0.04f)
+	{
+		const float Yaw = Controller ? Controller->GetControlRotation().Yaw : GetActorRotation().Yaw;
+		Direction = -FRotator(0.f, Yaw, 0.f).Vector();
+	}
+	if (!JavelinMovement->StartDodge(Direction))
+	{
+		return;
+	}
+
+	// The jets fire hard: dust blasts off the ground, the legs crouch into it, and the pad thumps.
+	const bool bOnGround = JavelinMovement->IsMovingOnGround();
+	if (bOnGround)
+	{
+		ADustEffect::Spawn(GetWorld(), GetFeetLocation(), 110.f, 0.55f, 6, DustColor, 0.8f);
+	}
+	LandingCrouch.Speed += 3.5f;
+	CameraDip.Speed -= 45.f;
+	AddCameraTrauma(0.14f);
+	PlayRumble(0.45f, 0.15f, true);
+	bWasDodging = true;
+	DodgeDustTimer = 0.f;
+}
+
+void AJavelinCharacter::UpdateDodge(float DeltaSeconds)
+{
+	const UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
+	if (JavelinMovement->IsDodging())
+	{
+		// A trail of dust off the skidding feet.
+		DodgeDustTimer -= DeltaSeconds;
+		if (DodgeDustTimer <= 0.f && JavelinMovement->IsMovingOnGround() && bFeetPlanted)
+		{
+			DodgeDustTimer = 0.05f;
+			for (const FJavelinFoot& Foot : Feet)
+			{
+				ADustEffect::Spawn(GetWorld(), Foot.Location - FVector(0.f, 0.f, AnkleHeight), 25.f, 0.3f, 2, DustColor, 0.5f);
+			}
+		}
+		return;
+	}
+
+	if (bWasDodging)
+	{
+		// The burst ends and the suit digs its feet in.
+		bWasDodging = false;
+		if (JavelinMovement->IsMovingOnGround())
+		{
+			LandingCrouch.Speed += 2.5f;
+			CameraDip.Speed -= 30.f;
+			PlayRumble(0.25f, 0.08f, true);
+			ADustEffect::Spawn(GetWorld(), GetFeetLocation(), 70.f, 0.4f, 4, DustColor, 0.6f);
+		}
+	}
 }
 
 void AJavelinCharacter::OnLaunchPressed()
@@ -774,8 +937,10 @@ void AJavelinCharacter::UpdateCombatFacing()
 	// On foot and falling the suit normally turns toward where it moves. In combat it faces the crosshair instead,
 	// so you can strafe while shooting. Hover already faces the camera, and flight steers itself.
 	UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
-	const bool bFaceAim = IsInCombatStance();
-	JavelinMovement->bOrientRotationToMovement = !bFaceAim;
+	// A dodge keeps the suit facing the way it was, so a sidestep stays a sidestep.
+	const bool bHoldFacing = JavelinMovement->IsDodging();
+	const bool bFaceAim = IsInCombatStance() && !bHoldFacing;
+	JavelinMovement->bOrientRotationToMovement = !bFaceAim && !bHoldFacing;
 	JavelinMovement->bUseControllerDesiredRotation = bFaceAim;
 }
 
@@ -896,6 +1061,7 @@ void AJavelinCharacter::Tick(float DeltaSeconds)
 	CheckGearUsed();
 	UpdateJetDust(DeltaSeconds);
 	UpdateFeelSprings(DeltaSeconds);
+	UpdateDodge(DeltaSeconds);
 	UpdateCamera(DeltaSeconds);
 	UpdateVisuals(DeltaSeconds);
 }
@@ -927,6 +1093,7 @@ void AJavelinCharacter::UpdateFeelSprings(float DeltaSeconds)
 	CameraDip.Update(DeltaSeconds, 90.f, 12.f);
 	CameraKick.Update(DeltaSeconds, 250.f, 30.f);
 	HitFlinch.Update(DeltaSeconds, 220.f, 18.f);
+	StepStomp.Update(DeltaSeconds, 170.f, 15.f);
 }
 
 void AJavelinCharacter::HandleLanded(const FVector& ImpactVelocity, bool bFromFlight)
@@ -980,17 +1147,20 @@ void AJavelinCharacter::HandleWeaponFired()
 
 void AJavelinCharacter::HandleFootstep(int32 Side, float Weight)
 {
-	// Every step is a thump: a little camera bob and some give in the knees. Sprinting stomps harder and kicks up dust.
-	CameraDip.Speed -= 18.f * Weight;
-	LandingCrouch.Speed += 0.35f * Weight;
+	// Every step is a stomp: the body drops onto the foot, the camera thumps and the pad gives a small knock.
+	// Sprinting stomps harder and kicks up dust.
+	StepStomp.Speed += 12.f * StepStompDrop * Weight;
+	CameraDip.Speed -= 24.f * Weight;
+	LandingCrouch.Speed += 0.2f * Weight;
+	AddCameraTrauma(0.012f * Weight);
+	PlayRumble(0.1f * Weight, 0.05f, true);
 
 	if (GetVelocity().Size2D() >= HeavyStepSpeed)
 	{
-		AddCameraTrauma(0.025f);
-		PlayRumble(0.15f, 0.06f, true);
-		const USceneComponent* Knee = Side == 0 ? LeftKnee : RightKnee;
-		const FVector Foot(Knee->GetComponentLocation().X, Knee->GetComponentLocation().Y, GetFeetLocation().Z);
-		ADustEffect::Spawn(GetWorld(), Foot, 30.f, 0.35f, 3, DustColor, 0.6f);
+		AddCameraTrauma(0.02f);
+		PlayRumble(0.18f, 0.07f, true);
+		const FVector Sole = Feet[FMath::Clamp(Side, 0, 1)].Location - FVector(0.f, 0.f, AnkleHeight);
+		ADustEffect::Spawn(GetWorld(), Sole, 30.f, 0.35f, 3, DustColor, 0.6f);
 	}
 }
 
@@ -1129,14 +1299,27 @@ void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
 	LastVelocity = SuitVelocity;
 	SmoothedAcceleration = FMath::VInterpTo(SmoothedAcceleration, SuitAcceleration.GetClampedToMaxSize(5000.f), DeltaSeconds, 6.f);
 
+	// Feet first: where they are decides how high the hips sit and how they sway and twist.
+	UpdateGait(DeltaSeconds);
+
 	float TargetPitch = 0.f;
 	float TargetRoll = 0.f;
+	float TiltSpeed = VisualTiltSpeed;
 	if (JavelinMovement->IsInFlight())
 	{
 		// Lie along the heading (back up, head forward) and bank into turns. In a hard turn the velocity
 		// drifts off the heading, so you see the suit slide.
 		TargetPitch = -90.f + JavelinMovement->GetFlightHeading().Rotation().Pitch;
 		TargetRoll = FMath::Clamp(YawRate * FlightBankFactor, -MaxFlightBank, MaxFlightBank);
+	}
+	else if (JavelinMovement->IsDodging())
+	{
+		// Throw the weight into the dodge.
+		const FVector LocalDodge = GetActorRotation().UnrotateVector(JavelinMovement->GetDodgeDirection());
+		const float Fade = 1.f - 0.5f * JavelinMovement->GetDodgeProgress();
+		TargetPitch = static_cast<float>(-LocalDodge.X) * DodgeLean * Fade;
+		TargetRoll = static_cast<float>(LocalDodge.Y) * DodgeLean * Fade;
+		TiltSpeed = VisualTiltSpeed * 2.f;
 	}
 	else if (JavelinMovement->IsMovingOnGround() && !IsSuitDown())
 	{
@@ -1146,12 +1329,13 @@ void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
 		TargetRoll = FMath::Clamp(static_cast<float>(LocalAccel.Y) * GroundLeanFactor, -MaxGroundLean, MaxGroundLean);
 	}
 
-	VisualPitch = FMath::FInterpTo(VisualPitch, TargetPitch, DeltaSeconds, VisualTiltSpeed);
-	VisualRoll = FMath::FInterpTo(VisualRoll, TargetRoll, DeltaSeconds, VisualTiltSpeed);
+	VisualPitch = FMath::FInterpTo(VisualPitch, TargetPitch, DeltaSeconds, TiltSpeed);
+	VisualRoll = FMath::FInterpTo(VisualRoll, TargetRoll, DeltaSeconds, TiltSpeed);
 
-	// Pitch first, then roll around the flight direction.
+	// Pitch first, then roll around the flight direction. The hips twist and tilt with the stride on top.
 	const FQuat Tilt = FRotator(0.f, 0.f, VisualRoll).Quaternion() * FRotator(VisualPitch, 0.f, 0.f).Quaternion();
-	VisualRoot->SetRelativeRotation(Tilt);
+	const FQuat HipMotion = FRotator(0.f, GaitHipYaw * LegIKWeight, GaitHipRoll * LegIKWeight).Quaternion();
+	VisualRoot->SetRelativeRotation(Tilt * HipMotion);
 
 	// Limbs blend toward the pose for the current movement state.
 	const FJavelinSuitPose Target = ComputeTargetPose(DeltaSeconds);
@@ -1170,6 +1354,7 @@ void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
 		Blend(CurrentPose.ElbowBend[Side], Target.ElbowBend[Side]);
 		Blend(CurrentPose.HipPitch[Side], Target.HipPitch[Side]);
 		Blend(CurrentPose.KneeBend[Side], Target.KneeBend[Side]);
+		Blend(CurrentPose.AnklePitch[Side], Target.AnklePitch[Side]);
 	}
 
 	// Quick reactions go on top of the blended pose so they snap instead of easing in.
@@ -1189,6 +1374,23 @@ void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
 		}
 	}
 
+	// The walking gait: hips ride up and down over the planted feet, drop as each foot stomps down, sway over the
+	// foot carrying the weight and twist with the stride. The shoulders twist back against the hips, and the head
+	// turns against both so it stays steady. Less twist while aiming so the gun stays on target.
+	if (LegIKWeight > 0.f)
+	{
+		const float W = LegIKWeight;
+		const float Stomp = FMath::Clamp(StepStomp.Value, -4.f, 15.f);
+		const float TwistScale = IsInCombatStance() ? 0.4f : 1.f;
+		FinalPose.BodyBob += (GaitBodyOffset - Stomp) * W;
+		FinalPose.BodySway += GaitSway * W;
+		FinalPose.TorsoPitch -= 0.6f * Stomp * W;
+		FinalPose.TorsoYaw -= GaitHipYaw * (1.f + 0.6f * TwistScale) * W;
+		FinalPose.TorsoRoll -= GaitHipRoll * 1.3f * W;
+		FinalPose.HeadYaw -= GaitHipYaw * W + FinalPose.TorsoYaw;
+		FinalPose.HeadRoll -= (GaitHipRoll * W + FinalPose.TorsoRoll) * 0.8f;
+	}
+
 	// Taking a hit snaps the torso and head.
 	FinalPose.TorsoPitch += HitFlinch.Value;
 	FinalPose.HeadPitch += HitFlinch.Value * 0.6f;
@@ -1203,13 +1405,23 @@ void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
 		FinalPose.ElbowBend[0] += 6.f * Kick;
 		FinalPose.TorsoPitch += 1.5f * Kick;
 	}
+
+	// Dodge jets: a hard burst from the feet and back that dies off through the dash.
+	if (JavelinMovement->IsDodging())
+	{
+		const float Burst = 1.3f * FMath::Sqrt(1.f - JavelinMovement->GetDodgeProgress());
+		FinalPose.FootFlame = FMath::Max(FinalPose.FootFlame, Burst);
+		FinalPose.BackFlame = FMath::Max(FinalPose.BackFlame, 0.8f * Burst);
+	}
+
 	ApplyPose(FinalPose);
+	ApplyLegIK();
 
 	// Thrusters glow blue when active and shift to red as heat builds.
 	if (ThrusterMaterial)
 	{
 		FLinearColor Color = ThrusterIdleColor;
-		if (JavelinMovement->GetJavelinMode() != EJavelinMoveMode::None)
+		if (JavelinMovement->GetJavelinMode() != EJavelinMoveMode::None || JavelinMovement->IsDodging())
 		{
 			Color = FLinearColor::LerpUsingHSV(ThrusterCoolColor, ThrusterHotColor, Heat->GetHeatPercent());
 		}
@@ -1218,6 +1430,322 @@ void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)
 			Color = ThrusterHotColor;
 		}
 		ThrusterMaterial->SetVectorParameterValue(TEXT("Color"), Color);
+	}
+}
+
+FVector AJavelinCharacter::GetFootRest(int32 Side) const
+{
+	const float HalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	return FVector(FootRestForward, Side == 0 ? -FootRestWidth : FootRestWidth, -HalfHeight + AnkleHeight);
+}
+
+void AJavelinCharacter::FindFootGround(const FVector& Around, FVector& OutAnkle, FVector& OutNormal) const
+{
+	const FVector Up = FVector::UpVector;
+	const FVector Start = Around + Up * 60.f;
+	const FVector End = Around - Up * 80.f;
+	FCollisionObjectQueryParams Objects;
+	Objects.AddObjectTypesToQuery(ECC_WorldStatic);
+	Objects.AddObjectTypesToQuery(ECC_WorldDynamic);
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(JavelinFoot), false, this);
+
+	FHitResult Hit;
+	if (GetWorld()->LineTraceSingleByObjectType(Hit, Start, End, Objects, Params))
+	{
+		OutAnkle = Hit.ImpactPoint + Up * AnkleHeight;
+		// Feet tilt to follow a slope, but not so far they look broken on a rock edge.
+		FVector Normal = Hit.ImpactNormal.GetSafeNormal();
+		if (FVector::DotProduct(Normal, Up) < 0.9f)
+		{
+			Normal = (Normal + Up).GetSafeNormal();
+		}
+		OutNormal = Normal.IsNearlyZero() ? Up : Normal;
+		return;
+	}
+	OutAnkle = FVector(Around.X, Around.Y, GetFeetLocation().Z + AnkleHeight);
+	OutNormal = Up;
+}
+
+void AJavelinCharacter::ResetFeet()
+{
+	const FTransform ActorTransform = GetActorTransform();
+	const float Yaw = GetActorRotation().Yaw;
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		FJavelinFoot& Foot = Feet[Side];
+		FindFootGround(ActorTransform.TransformPosition(GetFootRest(Side)), Foot.Location, Foot.Normal);
+		Foot.Yaw = Yaw + (Side == 0 ? -FootToeOut : FootToeOut);
+		Foot.bSwinging = false;
+		Foot.SwingProgress = 0.f;
+		Foot.Support = 1.f;
+		Foot.Stride = 0.f;
+		Foot.ToePitch = 0.f;
+		Foot.Target = Foot.Location;
+		Foot.TargetNormal = Foot.Normal;
+	}
+	bFeetPlanted = true;
+	GaitLastYaw = Yaw;
+	GaitLastLocation = GetActorLocation();
+}
+
+void AJavelinCharacter::UpdateGait(float DeltaSeconds)
+{
+	const UJavelinMovementComponent* JavelinMovement = GetJavelinMovement();
+	const bool bOnGround = JavelinMovement->IsMovingOnGround() && !IsSuitDown();
+
+	// Planted-foot IK only on the ground. In the air the legs go back to their animated poses.
+	LegIKWeight = FMath::FInterpConstantTo(LegIKWeight, bOnGround ? 1.f : 0.f, DeltaSeconds, 8.f);
+	if (!bOnGround)
+	{
+		bFeetPlanted = false;
+		GaitBodyOffset = FMath::FInterpTo(GaitBodyOffset, 0.f, DeltaSeconds, 8.f);
+		GaitSway = FMath::FInterpTo(GaitSway, 0.f, DeltaSeconds, 8.f);
+		GaitHipYaw = FMath::FInterpTo(GaitHipYaw, 0.f, DeltaSeconds, 8.f);
+		GaitHipRoll = FMath::FInterpTo(GaitHipRoll, 0.f, DeltaSeconds, 8.f);
+		GaitSpeed = 0.f;
+		bGaitRunning = false;
+		return;
+	}
+
+	// Touching down, or teleported (a reboot): put both feet under the hips.
+	if (!bFeetPlanted || FVector::DistSquared(GetActorLocation(), GaitLastLocation) > FMath::Square(400.f))
+	{
+		ResetFeet();
+	}
+	GaitLastLocation = GetActorLocation();
+
+	const FTransform ActorTransform = GetActorTransform();
+	const float ActorYaw = GetActorRotation().Yaw;
+	const float YawRate = FMath::FindDeltaAngleDegrees(GaitLastYaw, ActorYaw) / FMath::Max(DeltaSeconds, KINDA_SMALL_NUMBER);
+	GaitLastYaw = ActorYaw;
+	const float Omega = FMath::DegreesToRadians(FMath::Clamp(YawRate, -720.f, 720.f));
+
+	FVector LocalVelocity = ActorTransform.InverseTransformVectorNoScale(GetVelocity());
+	LocalVelocity.Z = 0.f;
+
+	// How fast a planted foot slides back relative to the hips: the body's speed, plus turning swinging it around.
+	auto FootRelativeVelocity = [&LocalVelocity, Omega](const FVector& Rest)
+	{
+		return LocalVelocity + FVector(-Omega * Rest.Y, Omega * Rest.X, 0.f);
+	};
+	GaitSpeed = 0.f;
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		GaitSpeed = FMath::Max(GaitSpeed, static_cast<float>(FootRelativeVelocity(GetFootRest(Side)).Size2D()));
+	}
+
+	const float WalkSpeed = FMath::Max(JavelinMovement->MaxWalkSpeed, 1.f);
+	const float SprintSpeed = FMath::Max(JavelinMovement->SprintSpeed, WalkSpeed + 1.f);
+	const float MoveAlpha = FMath::Clamp(GaitSpeed / WalkSpeed, 0.f, 1.f);
+	const float SprintAlpha = FMath::Clamp((GaitSpeed - WalkSpeed) / (SprintSpeed - WalkSpeed), 0.f, 1.f);
+
+	// Cadence: slow heavy steps when walking slowly, quicker at a sprint. Each foot stays down for as long as it
+	// can still reach, so at speed both feet leave the ground between steps, like a heavy run.
+	const float StepRate = GaitSpeed <= WalkSpeed
+		? FMath::Lerp(StepRateSlow, StepRateWalk, MoveAlpha)
+		: FMath::Lerp(StepRateWalk, StepRateSprint, SprintAlpha);
+	const float CycleRate = 0.5f * StepRate;
+	const float TargetDuty = FMath::Clamp(2.f * MaxFootReach * CycleRate / FMath::Max(GaitSpeed, 1.f), 0.18f, 0.62f);
+	GaitDuty = FMath::FInterpTo(GaitDuty, TargetDuty, DeltaSeconds, 6.f);
+	const float StanceTime = GaitDuty / CycleRate;
+	const bool bMoving = GaitSpeed > 30.f;
+	const bool bDodging = JavelinMovement->IsDodging();
+
+	auto OffRest = [this, &ActorTransform, ActorYaw](int32 Side)
+	{
+		const FJavelinFoot& Foot = Feet[Side];
+		const FVector Local = ActorTransform.InverseTransformPosition(Foot.Location);
+		const float RestYaw = ActorYaw + (Side == 0 ? -FootToeOut : FootToeOut);
+		return FVector::Dist2D(Local, GetFootRest(Side)) > SettleDistance
+			|| FMath::Abs(FMath::FindDeltaAngleDegrees(Foot.Yaw, RestYaw)) > SettleYaw;
+	};
+
+	if (bDodging)
+	{
+		// Dodging, the feet skid along the ground braced against the jets, set wide and trailing the dash.
+		const FVector LocalDodge = ActorTransform.InverseTransformVectorNoScale(JavelinMovement->GetDodgeDirection());
+		const float Hop = JavelinMovement->GetDodgeProgress() < 0.25f ? 6.f : 0.f;
+		for (int32 Side = 0; Side < 2; ++Side)
+		{
+			FJavelinFoot& Foot = Feet[Side];
+			const FVector Rest = GetFootRest(Side) + FVector(0.f, Side == 0 ? -6.f : 6.f, 0.f);
+			const FVector Brace = Rest - LocalDodge * 22.f + FVector(Side == 0 ? 6.f : -6.f, 0.f, 0.f);
+			FindFootGround(ActorTransform.TransformPosition(Brace), Foot.Location, Foot.Normal);
+			Foot.Location.Z += Hop;
+			Foot.Yaw = ActorYaw + (Side == 0 ? -FootToeOut : FootToeOut);
+			Foot.bSwinging = false;
+			Foot.ToePitch = 0.f;
+		}
+		bGaitRunning = false;
+	}
+	else
+	{
+		// Run the clock while moving, while a foot is in the air, or until both feet have settled under the hips.
+		const bool bNeedsStep = bMoving || Feet[0].bSwinging || Feet[1].bSwinging || OffRest(0) || OffRest(1);
+		if (bNeedsStep && !bGaitRunning)
+		{
+			// Starting off from a standstill: step right away instead of waiting for the clock to come round.
+			// Strafing leads with the foot on that side; otherwise the foot that's further back (or out of place) goes.
+			int32 Lead = Feet[0].Stride <= Feet[1].Stride ? 0 : 1;
+			if (!bMoving)
+			{
+				Lead = OffRest(0) ? 0 : 1;
+			}
+			else if (FMath::Abs(LocalVelocity.Y) > FMath::Abs(LocalVelocity.X))
+			{
+				Lead = LocalVelocity.Y > 0.f ? 1 : 0;
+			}
+			GaitPhase = FMath::Frac(GaitDuty + (Lead == 0 ? 0.f : 0.5f) - 0.001f);
+		}
+		bGaitRunning = bNeedsStep;
+		const float Advance = bNeedsStep ? FMath::Min(CycleRate * DeltaSeconds, 0.5f) : 0.f;
+		const float OldPhase = GaitPhase;
+		GaitPhase = FMath::Frac(GaitPhase + Advance);
+
+		const float SwingHeight = !bMoving ? StepHeight * 0.5f : FMath::Lerp(StepHeight * FMath::Max(MoveAlpha, 0.5f), SprintStepHeight, SprintAlpha);
+		for (int32 Side = 0; Side < 2; ++Side)
+		{
+			FJavelinFoot& Foot = Feet[Side];
+			const FVector Rest = GetFootRest(Side);
+			const float RestYaw = ActorYaw + (Side == 0 ? -FootToeOut : FootToeOut);
+
+			// Lift off when this foot's part of the cycle comes round. Standing still, a foot that's already in
+			// place stays put instead of tapping.
+			const float LiftMark = FMath::Frac(GaitDuty + (Side == 0 ? 0.f : 0.5f));
+			if (!Foot.bSwinging && PhaseCrossed(OldPhase, Advance, LiftMark) && (bMoving || OffRest(Side)))
+			{
+				Foot.bSwinging = true;
+				Foot.SwingStart = Foot.Location;
+				Foot.SwingStartYaw = Foot.Yaw;
+				Foot.SwingProgress = 0.f;
+				Foot.SwingHeight = SwingHeight;
+			}
+
+			if (Foot.bSwinging)
+			{
+				// Land ahead of the hip by half the distance the body will cover while this foot is down, so the
+				// body passes over it. Turning on the spot swings the landing spot around too.
+				FVector TargetLocal = Rest + FootRelativeVelocity(Rest) * (0.5f * StanceTime);
+				FVector Offset = TargetLocal - Rest;
+				Offset.Z = 0.f;
+				TargetLocal = Rest + Offset.GetClampedToMaxSize(MaxFootReach);
+				FindFootGround(ActorTransform.TransformPosition(TargetLocal), Foot.Target, Foot.TargetNormal);
+
+				const float SwingRate = CycleRate / FMath::Max(1.f - GaitDuty, 0.25f);
+				Foot.SwingProgress = FMath::Min(1.f, Foot.SwingProgress + SwingRate * DeltaSeconds);
+				const float S = Foot.SwingProgress;
+				const float Ease = S * S * (3.f - 2.f * S);
+
+				// The foot rises quickly, hangs, then comes down hard.
+				const float Early = FMath::Pow(S, 0.75f);
+				const float Lift = Foot.SwingHeight * 4.f * Early * (1.f - Early);
+				Foot.Location = FMath::Lerp(Foot.SwingStart, Foot.Target, Ease) + FVector(0.f, 0.f, Lift);
+				Foot.Yaw = Foot.SwingStartYaw + FMath::FindDeltaAngleDegrees(Foot.SwingStartYaw, RestYaw) * Ease;
+				Foot.Normal = FMath::Lerp(FVector::UpVector, Foot.TargetNormal, Ease).GetSafeNormal();
+				// Toes push off pointing down, then lift just before the heel comes down.
+				Foot.ToePitch = S < 0.5f ? -18.f * FMath::Sin(UE_PI * S / 0.5f) : 14.f * FMath::Sin(UE_PI * (S - 0.5f) / 0.5f);
+
+				if (S >= 1.f)
+				{
+					Foot.bSwinging = false;
+					Foot.Location = Foot.Target;
+					Foot.Normal = Foot.TargetNormal;
+					Foot.Yaw = RestYaw;
+					Foot.ToePitch = 0.f;
+					HandleFootstep(Side, bMoving ? FMath::Clamp(GaitSpeed / WalkSpeed, 0.35f, 1.4f) : 0.3f);
+				}
+			}
+			else
+			{
+				// A planted foot stays where it is in the world. If something shoves the suit further than the leg
+				// can reach (a hit, a hard stop), the foot gets dragged along.
+				FVector Local = ActorTransform.InverseTransformPosition(Foot.Location);
+				FVector Offset = Local - Rest;
+				const float MaxDrag = MaxFootReach * 1.35f;
+				const float Vertical = FMath::Clamp(static_cast<float>(Offset.Z), -40.f, 40.f);
+				Offset.Z = 0.f;
+				if (Offset.SizeSquared() > FMath::Square(MaxDrag) || !FMath::IsNearlyEqual(Vertical, static_cast<float>(Local.Z - Rest.Z)))
+				{
+					Local = Rest + Offset.GetClampedToMaxSize(MaxDrag) + FVector(0.f, 0.f, Vertical);
+					Foot.Location = ActorTransform.TransformPosition(Local);
+				}
+			}
+		}
+	}
+
+	// Hip height: as low as it has to be for each planted leg to reach its foot, plus the bent-knee stance.
+	// That makes the body ride highest over a foot and dip as the stride opens up, like a real heavy gait.
+	float BodyTarget = -StanceCrouch - (bDodging ? 10.f : 0.f);
+	bool bAnyPlanted = false;
+	const float MaxLeg = (ThighLength + ShinLength) * 0.98f;
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		FJavelinFoot& Foot = Feet[Side];
+		const FVector Local = ActorTransform.InverseTransformPosition(Foot.Location);
+		const FVector Rest = GetFootRest(Side);
+
+		Foot.Support = FMath::FInterpTo(Foot.Support, Foot.bSwinging ? 0.f : 1.f, DeltaSeconds, 12.f);
+		Foot.Stride = FMath::Clamp(static_cast<float>(Local.X - Rest.X) / FMath::Max(MaxFootReach, 1.f), -1.f, 1.f);
+
+		if (Foot.bSwinging)
+		{
+			continue;
+		}
+		bAnyPlanted = true;
+		const FVector Hip(0.f, (Side == 0 ? -HipWidth : HipWidth) + GaitSway, HipHeight);
+		const float Across = FVector::Dist2D(Hip, Local);
+		const float MaxDrop = FMath::Sqrt(FMath::Max(MaxLeg * MaxLeg - Across * Across, 1.f));
+		BodyTarget = FMath::Min(BodyTarget, MaxDrop - (HipHeight - static_cast<float>(Local.Z)));
+	}
+	if (!bAnyPlanted)
+	{
+		// Both feet off the ground between sprint strides: the body floats up a touch before the next stomp.
+		BodyTarget += 2.f + 3.f * SprintAlpha;
+	}
+	BodyTarget = FMath::Max(BodyTarget, -40.f);
+	// Drops quickly, rises slower: the suit's weight falls onto its legs and has to be pushed back up.
+	GaitBodyOffset = FMath::FInterpTo(GaitBodyOffset, BodyTarget, DeltaSeconds, BodyTarget < GaitBodyOffset ? 22.f : 9.f);
+
+	// Hips shift over the foot carrying the weight (less at a sprint), tilt down on the side of the swinging leg,
+	// and twist so the hip of the leading leg is forward. Standing still they settle with a slow idle shift.
+	const float WeightShift = Feet[1].Support - Feet[0].Support;
+	const float Idle = bMoving ? 0.f : 0.6f * FMath::Sin(AnimTime * 0.9f);
+	const float SwayTarget = HipSway * (1.f - 0.6f * SprintAlpha) * WeightShift + Idle;
+	const float TwistTarget = -HipTwist * FMath::Max(MoveAlpha, 0.3f) * 0.5f * (Feet[1].Stride - Feet[0].Stride);
+	const float TiltTarget = -HipTilt * WeightShift;
+	GaitSway = FMath::FInterpTo(GaitSway, SwayTarget, DeltaSeconds, 8.f);
+	GaitHipYaw = FMath::FInterpTo(GaitHipYaw, bDodging ? 0.f : TwistTarget, DeltaSeconds, 10.f);
+	GaitHipRoll = FMath::FInterpTo(GaitHipRoll, bDodging ? 0.f : TiltTarget, DeltaSeconds, 10.f);
+}
+
+void AJavelinCharacter::ApplyLegIK()
+{
+	if (LegIKWeight <= 0.f)
+	{
+		return;
+	}
+
+	const FTransform RootTransform = VisualRoot->GetComponentTransform();
+	USceneComponent* const Hips[2] = { LeftHip, RightHip };
+	USceneComponent* const Knees[2] = { LeftKnee, RightKnee };
+	USceneComponent* const Ankles[2] = { LeftAnkle, RightAnkle };
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		const FJavelinFoot& Foot = Feet[Side];
+		const FVector Delta = RootTransform.InverseTransformVectorNoScale(Foot.Location - Hips[Side]->GetComponentLocation());
+		FQuat HipRotation;
+		FQuat KneeRotation;
+		SolveLeg(Delta, HipRotation, KneeRotation);
+
+		// ApplyPose already set the animated rotations; blend from those for smooth take-offs and landings.
+		Hips[Side]->SetRelativeRotation(FQuat::Slerp(Hips[Side]->GetRelativeRotation().Quaternion(), HipRotation, LegIKWeight));
+		Knees[Side]->SetRelativeRotation(FQuat::Slerp(Knees[Side]->GetRelativeRotation().Quaternion(), KneeRotation, LegIKWeight));
+
+		// The foot lies flat on the ground (tilted to the slope) pointing its own way, whatever the leg above is doing.
+		const FVector Forward = FRotator(0.f, Foot.Yaw, 0.f).Vector();
+		const FQuat FootWorld = FRotationMatrix::MakeFromZX(Foot.Normal, Forward).ToQuat() * FRotator(Foot.ToePitch, 0.f, 0.f).Quaternion();
+		const FQuat AnkleRotation = Knees[Side]->GetComponentQuat().Inverse() * FootWorld;
+		Ankles[Side]->SetRelativeRotation(FQuat::Slerp(Ankles[Side]->GetRelativeRotation().Quaternion(), AnkleRotation, LegIKWeight));
 	}
 }
 
@@ -1287,40 +1815,26 @@ FJavelinSuitPose AJavelinCharacter::ComputeTargetPose(float DeltaSeconds)
 	default:
 		if (JavelinMovement->IsMovingOnGround())
 		{
-			// Walk cycle driven by ground speed, so feet roughly match the distance covered.
-			const float Speed = GetVelocity().Size2D();
-			const float Stride = FMath::Clamp(Speed / FMath::Max(JavelinMovement->MaxWalkSpeed, 1.f), 0.f, 1.4f);
-			const float OldPhase = WalkPhase;
-			const float NewPhase = OldPhase + DeltaSeconds * UE_TWO_PI * Speed / FMath::Max(WalkStrideLength, 1.f);
-
-			// A foot plants as it finishes its swing: the left at a quarter of the cycle, the right at three quarters.
-			if (Speed > 60.f)
-			{
-				const float Plants[3] = { UE_HALF_PI, UE_PI + UE_HALF_PI, UE_TWO_PI + UE_HALF_PI };
-				for (int32 Index = 0; Index < 3; ++Index)
-				{
-					if (OldPhase < Plants[Index] && NewPhase >= Plants[Index])
-					{
-						HandleFootstep(Index == 1 ? 1 : 0, Stride);
-					}
-				}
-			}
-			WalkPhase = FMath::Fmod(NewPhase, UE_TWO_PI);
-			const float Swing = FMath::Sin(WalkPhase);
+			// The legs are placed by the gait (UpdateGait and ApplyLegIK). This pose is the upper body: leaning into
+			// the stride, arms swinging against the legs, elbows pumping harder at a sprint, and a slow breath at rest.
+			const float WalkSpeed = FMath::Max(JavelinMovement->MaxWalkSpeed, 1.f);
+			const float MoveAlpha = FMath::Clamp(GaitSpeed / WalkSpeed, 0.f, 1.f);
+			const float SprintAlpha = FMath::Clamp((GaitSpeed - WalkSpeed) / FMath::Max(JavelinMovement->SprintSpeed - WalkSpeed, 1.f), 0.f, 1.f);
 			const float Breath = FMath::Sin(AnimTime * 1.6f);
+			const float Swing = FMath::Lerp(ArmSwing * MoveAlpha, SprintArmSwing, SprintAlpha);
 
-			Pose.TorsoPitch = -8.f * Stride;
-			Pose.HeadPitch = 6.f * Stride;
-			Pose.ShoulderSpread = 8.f + Breath;
-			Pose.BodyBob = -3.f * Stride * FMath::Abs(FMath::Cos(WalkPhase));
+			Pose.TorsoPitch = -5.f * MoveAlpha - 9.f * SprintAlpha + 0.8f * Breath * (1.f - MoveAlpha);
+			Pose.HeadPitch = -0.7f * Pose.TorsoPitch;
+			Pose.ShoulderSpread = 9.f + Breath * (1.f - MoveAlpha) + 3.f * SprintAlpha;
 			for (int32 Side = 0; Side < 2; ++Side)
 			{
-				const float SideSwing = Side == 0 ? Swing : -Swing;
-				const float Lift = FMath::Max(0.f, FMath::Cos(WalkPhase + (Side == 0 ? 0.f : UE_PI)));
-				Pose.HipPitch[Side] = 28.f * Stride * SideSwing;
-				Pose.KneeBend[Side] = -4.f - 45.f * Stride * Lift;
-				Pose.ShoulderPitch[Side] = -22.f * Stride * SideSwing;
-				Pose.ElbowBend[Side] = 15.f + 20.f * Stride + 2.f * Breath;
+				// The arm comes forward as the leg on the same side goes back.
+				const float Stride = Feet[Side].Stride;
+				Pose.ShoulderPitch[Side] = 4.f - Swing * Stride;
+				Pose.ElbowBend[Side] = 18.f + 10.f * MoveAlpha + 40.f * SprintAlpha + 14.f * FMath::Max(0.f, -Stride) * MoveAlpha + 2.f * Breath;
+				// Used only while blending in or out of the planted-foot legs: a bent-knee stance.
+				Pose.HipPitch[Side] = 12.f;
+				Pose.KneeBend[Side] = -22.f;
 			}
 		}
 		else
@@ -1332,6 +1846,8 @@ FJavelinSuitPose AJavelinCharacter::ComputeTargetPose(float DeltaSeconds)
 			Pose.HipPitch[1] = -8.f;
 			Pose.KneeBend[0] = -30.f;
 			Pose.KneeBend[1] = -20.f;
+			Pose.AnklePitch[0] = -15.f;
+			Pose.AnklePitch[1] = -10.f;
 			for (int32 Side = 0; Side < 2; ++Side)
 			{
 				Pose.ShoulderPitch[Side] = 15.f;
@@ -1374,14 +1890,15 @@ FJavelinSuitPose AJavelinCharacter::ComputeTargetPose(float DeltaSeconds)
 
 void AJavelinCharacter::ApplyPose(const FJavelinSuitPose& Pose)
 {
-	VisualRoot->SetRelativeLocation(FVector(0.f, 0.f, Pose.BodyBob));
-	TorsoPivot->SetRelativeRotation(FRotator(Pose.TorsoPitch, 0.f, 0.f));
-	HeadPivot->SetRelativeRotation(FRotator(Pose.HeadPitch, 0.f, 0.f));
+	VisualRoot->SetRelativeLocation(FVector(0.f, Pose.BodySway, Pose.BodyBob));
+	TorsoPivot->SetRelativeRotation(FRotator(Pose.TorsoPitch, Pose.TorsoYaw, Pose.TorsoRoll));
+	HeadPivot->SetRelativeRotation(FRotator(Pose.HeadPitch, Pose.HeadYaw, Pose.HeadRoll));
 
 	USceneComponent* const Shoulders[2] = { LeftShoulder, RightShoulder };
 	USceneComponent* const Elbows[2] = { LeftElbow, RightElbow };
 	USceneComponent* const Hips[2] = { LeftHip, RightHip };
 	USceneComponent* const Knees[2] = { LeftKnee, RightKnee };
+	USceneComponent* const Ankles[2] = { LeftAnkle, RightAnkle };
 	for (int32 Side = 0; Side < 2; ++Side)
 	{
 		// Negative roll swings a hanging limb toward +Y (the right side), so mirror it per side to spread outward.
@@ -1390,6 +1907,7 @@ void AJavelinCharacter::ApplyPose(const FJavelinSuitPose& Pose)
 		Elbows[Side]->SetRelativeRotation(FRotator(Pose.ElbowBend[Side], 0.f, 0.f));
 		Hips[Side]->SetRelativeRotation(FRotator(Pose.HipPitch[Side], 0.f, Pose.LegSpread * Outward));
 		Knees[Side]->SetRelativeRotation(FRotator(Pose.KneeBend[Side], 0.f, 0.f));
+		Ankles[Side]->SetRelativeRotation(FRotator(Pose.AnklePitch[Side], 0.f, 0.f));
 	}
 
 	// Flames flicker and stretch with thrust, and hide when the jets are off.

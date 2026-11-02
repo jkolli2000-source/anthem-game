@@ -33,9 +33,15 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FOnJavelinCrashed, const FVector& /*ImpactV
  * and gravity speeds up dives and slows climbs, so a dive carries its speed
  * into the pull-up.
  *
- * The suit is heavy on the ground: it builds up speed and stops over a short
- * distance, turns with some weight, skids when it lands fast, and a hard
- * landing slows it down for a moment.
+ * The suit is heavy on the ground: the first push-off is strong so it still
+ * answers the sticks right away, but it builds the rest of its speed over a
+ * moment, turns slower the faster it goes, has to plant and brake to reverse
+ * at speed, skids when it lands fast, and a hard landing slows it down for a
+ * moment.
+ *
+ * Dodge is a short jet-boosted dash on the ground or while hovering. It goes
+ * the way you push the stick (or back, with no input), keeps the suit facing
+ * the same way, and bleeds off into a skid at the end.
  */
 UCLASS()
 class ANTHEMGAME_API UJavelinMovementComponent : public UCharacterMovementComponent
@@ -47,7 +53,59 @@ public:
 
 	/** Ground speed while sprint is held. Walk speed is MaxWalkSpeed. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Ground", meta = (ClampMin = "0", Units = "cm/s"))
-	float SprintSpeed = 1100.f;
+	float SprintSpeed = 1000.f;
+
+	/** Acceleration from a standstill. High so the first step answers the input right away. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Ground", meta = (ClampMin = "0"))
+	float GroundStartAcceleration = 2800.f;
+
+	/** Acceleration near top speed. Lower makes the suit take longer to wind up to a full sprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Ground", meta = (ClampMin = "0"))
+	float GroundTopAcceleration = 1200.f;
+
+	/** How quickly the suit's path bends toward a new direction when walking slowly. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Ground", meta = (ClampMin = "0"))
+	float GroundTurnGripSlow = 10.f;
+
+	/** How quickly the path bends at full sprint. Lower makes fast turns wider and heavier. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Ground", meta = (ClampMin = "0"))
+	float GroundTurnGripFast = 4.f;
+
+	/** Extra braking when you push against the way you're moving, so reversing at speed plants and stops first. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Ground", meta = (ClampMin = "0"))
+	float GroundReverseBraking = 2600.f;
+
+	/** How fast the suit turns to face where it's going while standing or walking slowly. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Ground", meta = (ClampMin = "0", Units = "deg"))
+	float GroundTurnRateSlow = 480.f;
+
+	/** How fast it turns at full sprint. Lower feels heavier. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Ground", meta = (ClampMin = "0", Units = "deg"))
+	float GroundTurnRateFast = 240.f;
+
+	/** How fast the suit turns to face the crosshair while aiming or shooting. Kept quick so aiming stays responsive. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Ground", meta = (ClampMin = "0", Units = "deg"))
+	float CombatTurnRate = 620.f;
+
+	/** Speed at the start of a dodge. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Dodge", meta = (ClampMin = "0", Units = "cm/s"))
+	float DodgeSpeed = 2300.f;
+
+	/** How long the dodge's jet burst lasts. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Dodge", meta = (ClampMin = "0.05", Units = "s"))
+	float DodgeDuration = 0.32f;
+
+	/** Fraction of the dodge speed left when the burst ends; the suit then skids to a stop or walks on. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Dodge", meta = (ClampMin = "0", ClampMax = "1"))
+	float DodgeEndSpeedFraction = 0.3f;
+
+	/** Seconds from the start of one dodge until the next is ready. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Dodge", meta = (ClampMin = "0", Units = "s"))
+	float DodgeCooldown = 0.75f;
+
+	/** Allow dodging while hovering, as an air dash. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Dodge")
+	bool bCanDodgeWhileHovering = true;
 
 	/** Speed when flying with no forward or back input. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Flight", meta = (ClampMin = "0", Units = "cm/s"))
@@ -188,6 +246,27 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Javelin")
 	void SetSprinting(bool bSprint) { bWantsToSprint = bSprint; }
 
+	/** True if a dodge can start now: on the ground (or hovering), not mid-dodge and off cooldown. */
+	UFUNCTION(BlueprintPure, Category = "Javelin")
+	bool CanDodge() const;
+
+	/** Dashes along Direction (flattened). Returns false if a dodge can't start now. */
+	UFUNCTION(BlueprintCallable, Category = "Javelin")
+	bool StartDodge(const FVector& Direction);
+
+	UFUNCTION(BlueprintPure, Category = "Javelin")
+	bool IsDodging() const { return DodgeRemaining > 0.f; }
+
+	/** How far through the dodge burst, 0 at the start to 1 at the end. */
+	UFUNCTION(BlueprintPure, Category = "Javelin")
+	float GetDodgeProgress() const { return DodgeDuration > 0.f ? 1.f - DodgeRemaining / DodgeDuration : 1.f; }
+
+	/** The way the current (or last) dodge went, flat and normalized. */
+	FVector GetDodgeDirection() const { return DodgeDirection; }
+
+	/** True while sprint is wanted, even in the air. */
+	bool WantsToSprint() const { return bWantsToSprint; }
+
 	/** Move input while flying: X is left/right, Y is forward/back. */
 	void SetFlightInput(const FVector2D& Input) { FlightInput = Input; }
 
@@ -210,6 +289,7 @@ public:
 	FVector GetFlightHeading() const { return FlightHeading; }
 
 	virtual float GetMaxSpeed() const override;
+	virtual float GetMaxAcceleration() const override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration) override;
 
@@ -228,4 +308,7 @@ private:
 	FVector FlightHeading = FVector::ForwardVector;
 	float LandingRecoveryRemaining = 0.f;
 	float LandingSkidRemaining = 0.f;
+	float DodgeRemaining = 0.f;
+	float DodgeCooldownRemaining = 0.f;
+	FVector DodgeDirection = FVector::ForwardVector;
 };

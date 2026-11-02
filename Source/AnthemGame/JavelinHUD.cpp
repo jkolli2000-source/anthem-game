@@ -131,6 +131,7 @@ void AJavelinHUD::DrawHUD()
 			TEXT("WASD  move            Mouse  look"),
 			TEXT("Space  jump / hover in the air / stop hovering"),
 			TEXT("Shift  hold to sprint / fly while airborne / stop flying"),
+			TEXT("Ctrl or C  dodge the way you're moving (backward if standing still)"),
 			TEXT("F  take off straight into flight"),
 			TEXT("Left mouse  fire     Right mouse  aim     R  reload"),
 			TEXT("Q  frag grenade     E  homing missiles (lock onto enemies near the crosshair)"),

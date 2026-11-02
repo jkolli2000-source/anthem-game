@@ -44,14 +44,24 @@ struct FJavelinCameraProfile
 struct FJavelinSuitPose
 {
 	float TorsoPitch = 0.f;
+	/** Torso twist and side tilt on top of the hips, for counter-rotating the shoulders against the stride. */
+	float TorsoYaw = 0.f;
+	float TorsoRoll = 0.f;
 	float HeadPitch = 0.f;
+	/** The head turns and tilts against the body so it stays steady while the suit stomps around. */
+	float HeadYaw = 0.f;
+	float HeadRoll = 0.f;
 	float ShoulderPitch[2] = {};
 	float ShoulderSpread = 0.f;
 	float ElbowBend[2] = {};
 	float HipPitch[2] = {};
 	float LegSpread = 0.f;
 	float KneeBend[2] = {};
+	/** Foot tilt when the legs aren't planted on the ground (falling, kneeling). Positive lifts the toes. */
+	float AnklePitch[2] = {};
 	float BodyBob = 0.f;
+	/** Hips shifting sideways over the planted foot, in cm. Positive is to the suit's right. */
+	float BodySway = 0.f;
 	float BackFlame = 0.f;
 	float FootFlame = 0.f;
 };
@@ -76,18 +86,55 @@ struct FJavelinSpring
 	}
 };
 
+/** One foot of the walking gait. Positions are in world space so planted feet stay exactly where they landed. */
+struct FJavelinFoot
+{
+	/** Ankle position. */
+	FVector Location = FVector::ZeroVector;
+	/** Ground normal under the foot, so it sits flat on slopes. */
+	FVector Normal = FVector::UpVector;
+	/** Which way the foot points (world yaw). */
+	float Yaw = 0.f;
+
+	bool bSwinging = false;
+	FVector SwingStart = FVector::ZeroVector;
+	float SwingStartYaw = 0.f;
+	/** 0 at lift-off to 1 at touch-down. */
+	float SwingProgress = 0.f;
+	float SwingHeight = 0.f;
+	/** Where the swinging foot will land, refreshed every frame. */
+	FVector Target = FVector::ZeroVector;
+	FVector TargetNormal = FVector::UpVector;
+
+	/** 1 while the foot carries weight, 0 while it swings. Smoothed; drives the hip sway. */
+	float Support = 1.f;
+	/** How far the foot is ahead (+1) or behind (-1) its rest spot. Drives the arm swing and hip twist. */
+	float Stride = 0.f;
+	/** Toe tilt during the swing: down as it pushes off, up just before it lands. */
+	float ToePitch = 0.f;
+};
+
 /**
  * The player's javelin (Ranger for now).
  *
  * Controls (keyboard and mouse / gamepad):
  *  - Move: WASD / left stick. Look: mouse / right stick.
  *  - Space / A: jump on the ground, hover in the air, stop hovering, or switch flight to hover.
- *  - Left Shift / left stick click: hold to sprint on the ground, start flying in the air, stop flying in flight.
+ *  - Left Shift: hold to sprint on the ground. Left stick click: sprint until you stop moving or click again.
+ *    Either one starts flying in the air and stops flying in flight.
+ *  - Left Ctrl or C / B: dodge the way you're moving (backward with no input), on the ground or hovering.
  *  - F / Y: take off into flight from anywhere.
  *  - Left mouse / right trigger: fire. Right mouse / left trigger: hold to aim down sights.
  *  - R / X: reload. You can shoot on the ground, in the air and while hovering, but not while flying.
  *  - Q / left bumper: frag grenade. E / right bumper: homing missiles. Each has its own cooldown,
  *    and like the gun they can't be used while flying.
+ *
+ * Walking is procedural: each foot plants on the ground and stays put while
+ * the body moves over it, then lifts and swings to where it will land next
+ * (two-bone leg IK). The hips sway over the planted foot, twist with the
+ * stride while the shoulders counter-twist, the arms swing opposite the legs,
+ * the head stays steady, and each footfall drops the body a little. Turning
+ * on the spot shuffles the feet, and stopping takes a settling step.
  *
  * The suit is meant to feel heavy: footsteps thump the camera, landings
  * compress the legs and dip the camera (hard ones kick up dust and slow you
@@ -220,6 +267,12 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
 	TObjectPtr<USceneComponent> RightKnee;
 
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> LeftAnkle;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> RightAnkle;
+
 	/** End of the gun barrel, held in the right hand. Shots and tracers start here. */
 	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
 	TObjectPtr<USceneComponent> Muzzle;
@@ -279,6 +332,13 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> ThrustAction;
+
+	/** Gamepad version of thrust: clicking the stick toggles sprint instead of having to hold it. */
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> ThrustToggleAction;
+
+	UPROPERTY(EditAnywhere, Category = "Input")
+	TObjectPtr<UInputAction> DodgeAction;
 
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> LaunchAction;
@@ -438,9 +498,61 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Feel|Rumble", meta = (ClampMin = "0", ClampMax = "1"))
 	float RumbleScale = 1.f;
 
-	/** Distance covered by one full walk cycle (two steps). */
-	UPROPERTY(EditAnywhere, Category = "Visuals|Animation", meta = (Units = "cm"))
-	float WalkStrideLength = 170.f;
+	/** Steps per second at full walking speed. Lower is slower and heavier, but each step has to reach further. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0.5"))
+	float StepRateWalk = 3.f;
+
+	/** Steps per second at full sprint. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0.5"))
+	float StepRateSprint = 3.8f;
+
+	/** Steps per second when barely moving, turning on the spot or taking a settling step. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0.5"))
+	float StepRateSlow = 1.8f;
+
+	/** Furthest a foot lands ahead of (or pushes off behind) the spot under its hip. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "10", ClampMax = "65", Units = "cm"))
+	float MaxFootReach = 48.f;
+
+	/** How high a foot lifts at walking speed. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0", Units = "cm"))
+	float StepHeight = 20.f;
+
+	/** How high a foot lifts at full sprint. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0", Units = "cm"))
+	float SprintStepHeight = 30.f;
+
+	/** How far the hips sit below standing straight, so the knees stay bent like a heavy mech. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0", ClampMax = "30", Units = "cm"))
+	float StanceCrouch = 7.f;
+
+	/** How far the body drops as a foot slams down, at walking speed. Sprinting drops more. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0", Units = "cm"))
+	float StepStompDrop = 5.f;
+
+	/** How far the hips shift over the planted foot. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0", Units = "cm"))
+	float HipSway = 4.f;
+
+	/** How much the hips twist with the stride; the shoulders twist back the other way. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0", Units = "deg"))
+	float HipTwist = 7.f;
+
+	/** How much the hips tilt down on the side of the swinging leg. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0", Units = "deg"))
+	float HipTilt = 3.f;
+
+	/** Arm swing at walking speed. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0", Units = "deg"))
+	float ArmSwing = 26.f;
+
+	/** Arm swing at full sprint. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0", Units = "deg"))
+	float SprintArmSwing = 44.f;
+
+	/** How far the suit leans into a dodge. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Walking", meta = (ClampMin = "0", Units = "deg"))
+	float DodgeLean = 14.f;
 
 	/** How quickly limbs blend between poses. */
 	UPROPERTY(EditAnywhere, Category = "Visuals|Animation")
@@ -464,6 +576,8 @@ private:
 	void OnJumpReleased();
 	void OnThrustPressed();
 	void OnThrustReleased();
+	void OnThrustTogglePressed();
+	void OnDodgePressed();
 	void OnLaunchPressed();
 	void OnFirePressed();
 	void OnFireReleased();
@@ -488,6 +602,18 @@ private:
 	void CheckGearUsed();
 	void UpdateJetDust(float DeltaSeconds);
 	void UpdateFeelSprings(float DeltaSeconds);
+	void UpdateDodge(float DeltaSeconds);
+
+	/** Moves the feet: plants, lifts and swings them, and works out the hip height, sway and twist that go with it. */
+	void UpdateGait(float DeltaSeconds);
+	/** Puts both feet down under the hips, for landings and teleports. */
+	void ResetFeet();
+	/** Where the ground is under a point, for placing a foot. Falls back to the capsule's feet if nothing is hit. */
+	void FindFootGround(const FVector& Around, FVector& OutAnkle, FVector& OutNormal) const;
+	/** Where a foot rests under its hip, in the actor's space. Side 0 is left, 1 right. */
+	FVector GetFootRest(int32 Side) const;
+	/** Bends the hips, knees and ankles so the feet reach where the gait put them. Runs after ApplyPose. */
+	void ApplyLegIK();
 
 	/** Where the bottom of the capsule is: the suit's feet when standing. */
 	FVector GetFeetLocation() const;
@@ -515,8 +641,37 @@ private:
 	void BuildMissilePod(USceneComponent* Torso, UStaticMesh* Cube, UStaticMesh* Cylinder);
 
 	FJavelinSuitPose CurrentPose;
-	float WalkPhase = 0.f;
 	float AnimTime = 0.f;
+
+	// Walking gait state.
+	FJavelinFoot Feet[2];
+	bool bFeetPlanted = false;
+	/** False while the gait clock is paused with both feet settled. */
+	bool bGaitRunning = false;
+	/** Runs 0 to 1 over two steps. The left foot lifts at Duty, the right half a cycle later. */
+	float GaitPhase = 0.f;
+	/** Fraction of the cycle each foot is on the ground. Lower at speed, when both feet leave the ground between steps. */
+	float GaitDuty = 0.6f;
+	/** Blends the legs between planted-foot IK (1) and the animated poses (0) for flying, falling and so on. */
+	float LegIKWeight = 0.f;
+	float GaitBodyOffset = 0.f;
+	float GaitSway = 0.f;
+	float GaitHipYaw = 0.f;
+	float GaitHipRoll = 0.f;
+	float GaitLastYaw = 0.f;
+	FVector GaitLastLocation = FVector::ZeroVector;
+	/** How fast the feet are being carried along, including turning on the spot. */
+	float GaitSpeed = 0.f;
+
+	/** Body dropping as each foot slams down, in cm. */
+	FJavelinSpring StepStomp;
+
+	/** The last move input, as a flat world direction, for picking the dodge direction. */
+	FVector LastMoveInput = FVector::ZeroVector;
+	/** True when sprint was switched on by clicking the gamepad stick, so it turns off when you stop. */
+	bool bSprintToggled = false;
+	bool bWasDodging = false;
+	float DodgeDustTimer = 0.f;
 
 	float VisualPitch = 0.f;
 	float VisualRoll = 0.f;
