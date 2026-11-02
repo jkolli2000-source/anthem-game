@@ -62,15 +62,15 @@ public:
 	float FlightSlowSpeed = 1600.f;
 
 	/** How hard the thrusters push speed up toward the target speed. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Flight", meta = (ClampMin = "0", Units = "cm/s2"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Flight", meta = (ClampMin = "0"))
 	float FlightThrustAcceleration = 2200.f;
 
 	/** How quickly air drag slows you when you're faster than the target speed, say after a dive. Lower carries momentum longer. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Flight", meta = (ClampMin = "0", Units = "cm/s2"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Flight", meta = (ClampMin = "0"))
 	float FlightDragDeceleration = 900.f;
 
 	/** How much gravity speeds up dives and slows climbs, along the flight path. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Flight", meta = (ClampMin = "0", Units = "cm/s2"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Javelin|Flight", meta = (ClampMin = "0"))
 	float FlightGravity = 900.f;
 
 	/** The suit never flies slower than this, even climbing straight up. */
