@@ -992,8 +992,8 @@ void AJungleWorld::BuildRocks(FRandomStream& Random)
 	}
 
 	// Boulders, mostly on slopes and along riverbanks.
-	const int32 Boulders = FMath::RoundToInt(1500 * VegetationDensity);
-	for (int32 Index = 0; Index < Boulders; ++Index)
+	const int32 BoulderCount = FMath::RoundToInt(1500 * VegetationDensity);
+	for (int32 Index = 0; Index < BoulderCount; ++Index)
 	{
 		const float X = Random.FRandRange(-HalfSize, HalfSize);
 		const float Y = Random.FRandRange(-HalfSize, HalfSize);
