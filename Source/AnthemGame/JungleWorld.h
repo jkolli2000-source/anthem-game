@@ -97,6 +97,37 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Jungle")
 	bool bSetUpJungleAtmosphere = true;
 
+	/** Adds the dark, stormy sky with rain, lightning and a day and night cycle (a JungleWeather) when play starts. */
+	UPROPERTY(EditAnywhere, Category = "Jungle")
+	bool bSpawnWeather = true;
+
+	/**
+	 * Finds free Megascans ground, mud and rock surfaces and rock models you've added to the project from Fab,
+	 * and uses them for the terrain and boulders. Anything it doesn't find keeps the plain colors below.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Jungle|Art")
+	bool bUseMegascans = true;
+
+	/** The jungle floor. Leave empty to pick a Megascans surface automatically. */
+	UPROPERTY(EditAnywhere, Category = "Jungle|Art")
+	TObjectPtr<UMaterialInterface> GroundMaterial;
+
+	/** Riverbanks, swamps and lake beds. Leave empty to pick one automatically (or to reuse the ground). */
+	UPROPERTY(EditAnywhere, Category = "Jungle|Art")
+	TObjectPtr<UMaterialInterface> MudMaterial;
+
+	/** Cliffs, steep slopes and mountaintops. Leave empty to pick a Megascans rock surface automatically. */
+	UPROPERTY(EditAnywhere, Category = "Jungle|Art")
+	TObjectPtr<UMaterialInterface> CliffMaterial;
+
+	/** Rock models scattered over the slopes and riverbanks. Leave empty to use the Megascans rocks you've added. */
+	UPROPERTY(EditAnywhere, Category = "Jungle|Art")
+	TArray<TObjectPtr<UStaticMesh>> BoulderMeshes;
+
+	/** How big one repeat of the ground, mud and cliff textures is. */
+	UPROPERTY(EditAnywhere, Category = "Jungle|Art", meta = (ClampMin = "0.5", ClampMax = "50", Units = "m"))
+	float GroundTextureSize = 4.f;
+
 	UPROPERTY(EditAnywhere, Category = "Jungle|Colors")
 	FLinearColor GrassColor = FLinearColor(0.045f, 0.11f, 0.025f);
 
@@ -158,6 +189,13 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Components")
 	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> Rocks;
 
+	/**
+	 * Invisible boxes that give the Megascans rocks their collision, since not every rock model comes with
+	 * collision of its own.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Components")
+	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> RockColliders;
+
 	UPROPERTY(VisibleAnywhere, Category = "Components")
 	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> Ruins;
 
@@ -201,6 +239,23 @@ protected:
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> BaseMaterial;
+
+	/** One set of boulders for each rock model in use. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> Boulders;
+
+	/** The art in use, from the settings above or found automatically. */
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> UsedGround;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> UsedMud;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> UsedCliff;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMesh>> UsedBoulders;
 
 private:
 	/** A flattened spot in the terrain: the start clearing, ruins and caves. */
@@ -249,7 +304,17 @@ private:
 	void BuildForest(FRandomStream& Random);
 	void BuildUndergrowth(FRandomStream& Random);
 
+	/** Works out which ground, mud, cliff and rock art to use, looking for Megascans if any are missing. */
+	void FindArt();
+
+	/** Makes a set of boulders for each rock model. */
+	void MakeBoulderSets();
+
+	/** Queues one boulder, fitted to a size in meters and sitting with its middle at Center (meters). */
+	void AddBoulder(const FVector& Center, const FVector& Size, const FRotator& Rotation);
+
 	void SpawnStartArea();
+	void SpawnWeather();
 	void SpawnRuinCamps();
 	void SetUpAtmosphere();
 	void HideTemplateFloor();
