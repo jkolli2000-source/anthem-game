@@ -14,7 +14,8 @@ public class AnthemGame : ModuleRules
 			"InputCore",
 			"EnhancedInput",
 			"GameplayTags",
-			"ProceduralMeshComponent"
+			"ProceduralMeshComponent",
+			"AssetRegistry"
 		});
 	}
 }

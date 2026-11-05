@@ -4,6 +4,9 @@
 #include "EngineUtils.h"
 #include "FlightTestArena.h"
 #include "JavelinHeatComponent.h"
+#include "JungleWeather.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
 #include "ProceduralMeshComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/DirectionalLightComponent.h"
@@ -17,6 +20,7 @@
 #include "Engine/StaticMeshActor.h"
 #include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInstance.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "UObject/ConstructorHelpers.h"
 #include "UObject/UObjectIterator.h"
@@ -67,6 +71,30 @@ namespace
 		return Sum / Total;
 	}
 
+	/** Where a keyword first appears in a list (lower is a better match), or INDEX_NONE if none of them are in Text. */
+	int32 KeywordRank(const FString& Text, std::initializer_list<const TCHAR*> Keywords)
+	{
+		int32 Rank = 0;
+		for (const TCHAR* Keyword : Keywords)
+		{
+			if (Text.Contains(Keyword))
+			{
+				return Rank;
+			}
+			++Rank;
+		}
+		return INDEX_NONE;
+	}
+
+	// Words that sort Megascans assets into rock, mud and ground. Rock is checked first, so a mossy rock is a rock.
+	const std::initializer_list<const TCHAR*> RockWords = { TEXT("cliff"), TEXT("rock"), TEXT("stone"), TEXT("boulder"), TEXT("granite"), TEXT("basalt") };
+	const std::initializer_list<const TCHAR*> MudWords = { TEXT("mud"), TEXT("swamp"), TEXT("riverbed"), TEXT("silt"), TEXT("wet") };
+	const std::initializer_list<const TCHAR*> GroundWords = { TEXT("jungle"), TEXT("rainforest"), TEXT("forest_floor"), TEXT("forest"),
+		TEXT("moss"), TEXT("leaves"), TEXT("leaf"), TEXT("ground"), TEXT("soil"), TEXT("grass"), TEXT("dirt"), TEXT("floor") };
+
+	/** Up to this many different rock models are used for the boulders and spires. */
+	constexpr int32 MaxBoulderModels = 6;
+
 	/** Like FMath::Min, but rounds off the corner where the two meet. */
 	float SmoothMin(float A, float B, float Smoothing)
 	{
@@ -97,6 +125,10 @@ AJungleWorld::AJungleWorld()
 	Water = MakeInstances(TEXT("Water"), CubeMesh.Object, false, false);
 	Waterfalls = MakeInstances(TEXT("Waterfalls"), CubeMesh.Object, false, false);
 	Rocks = MakeInstances(TEXT("Rocks"), CubeMesh.Object, true, true);
+	RockColliders = MakeInstances(TEXT("RockColliders"), CubeMesh.Object, true, false);
+	RockColliders->SetVisibility(false);
+	RockColliders->SetHiddenInGame(true);
+	RockColliders->bAffectDistanceFieldLighting = false;
 	Ruins = MakeInstances(TEXT("Ruins"), CubeMesh.Object, true, true);
 	Trunks = MakeInstances(TEXT("Trunks"), CylinderMesh.Object, true, true);
 	GiantWood = MakeInstances(TEXT("GiantWood"), CubeMesh.Object, true, true);
@@ -162,7 +194,7 @@ void AJungleWorld::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 
-	TArray<UHierarchicalInstancedStaticMeshComponent*> AllInstances = { Water, Waterfalls, Rocks, Ruins, Trunks, GiantWood, GiantPlatforms,
+	TArray<UHierarchicalInstancedStaticMeshComponent*> AllInstances = { Water, Waterfalls, Rocks, RockColliders, Ruins, Trunks, GiantWood, GiantPlatforms,
 		LeavesDark, Leaves, LeavesLight, PalmFronds, Vines, Ferns, Bushes, Flowers };
 	for (UHierarchicalInstancedStaticMeshComponent* Component : AllInstances)
 	{
@@ -198,6 +230,13 @@ void AJungleWorld::OnConstruction(const FTransform& Transform)
 	Flowers->SetCullDistances(FMath::RoundToInt(PlantCull * 0.8f), PlantCull);
 	Bushes->SetCullDistances(FMath::RoundToInt(PlantCull * 1.3f), FMath::RoundToInt(PlantCull * 1.6f));
 
+	FindArt();
+	MakeBoulderSets();
+	for (UHierarchicalInstancedStaticMeshComponent* Component : Boulders)
+	{
+		Component->SetCullDistances(FMath::RoundToInt(TreeCull * 0.85f), TreeCull);
+	}
+
 	ComputeGrid();
 	BuildTerrain();
 	BuildWater();
@@ -212,6 +251,162 @@ void AJungleWorld::OnConstruction(const FTransform& Transform)
 	BuildUndergrowth(Random);
 
 	AddQueuedShapes();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Art
+
+void AJungleWorld::FindArt()
+{
+	UsedGround = GroundMaterial;
+	UsedMud = MudMaterial;
+	UsedCliff = CliffMaterial;
+	UsedBoulders.Reset();
+	for (UStaticMesh* Mesh : BoulderMeshes)
+	{
+		if (Mesh)
+		{
+			UsedBoulders.Add(Mesh);
+		}
+	}
+
+	if (bUseMegascans && (!UsedGround || !UsedMud || !UsedCliff || UsedBoulders.Num() == 0))
+	{
+		// Look through everything in the project for Megascans: Fab puts them in Content/Fab/Megascans, and the
+		// older Quixel Bridge in Content/Megascans.
+		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+		FARFilter Filter;
+		Filter.PackagePaths.Add(TEXT("/Game"));
+		Filter.bRecursivePaths = true;
+		Filter.bRecursiveClasses = true;
+		Filter.ClassPaths.Add(UMaterialInstance::StaticClass()->GetClassPathName());
+		Filter.ClassPaths.Add(UStaticMesh::StaticClass()->GetClassPathName());
+		TArray<FAssetData> Assets;
+		Registry.GetAssets(Filter, Assets);
+
+		// Sorted, so the same art is picked every time.
+		TArray<TPair<FString, FAssetData>> Sorted;
+		for (const FAssetData& Asset : Assets)
+		{
+			const FString Path = Asset.GetSoftObjectPath().ToString();
+			if (Path.Contains(TEXT("Megascans")) || Path.StartsWith(TEXT("/Game/Fab/")) || Path.Contains(TEXT("Quixel")))
+			{
+				Sorted.Emplace(Path, Asset);
+			}
+		}
+		Sorted.Sort([](const TPair<FString, FAssetData>& A, const TPair<FString, FAssetData>& B) { return A.Key < B.Key; });
+
+		const FAssetData* BestGround = nullptr;
+		const FAssetData* BestMud = nullptr;
+		const FAssetData* BestCliff = nullptr;
+		int32 GroundRank = MAX_int32;
+		int32 MudRank = MAX_int32;
+		int32 CliffRank = MAX_int32;
+		TArray<const FAssetData*> Rocks3D;
+		for (const TPair<FString, FAssetData>& Entry : Sorted)
+		{
+			const FString& Path = Entry.Key;
+			const FAssetData& Asset = Entry.Value;
+			if (Path.Contains(TEXT("plant")) || Path.Contains(TEXT("decal")) || Path.Contains(TEXT("imperfection")) || Path.Contains(TEXT("atlas"))
+				|| Path.Contains(TEXT("imposter")))
+			{
+				continue;
+			}
+
+			const bool b3D = Path.Contains(TEXT("/3d"));
+			if (Asset.IsInstanceOf(UStaticMesh::StaticClass()))
+			{
+				// Rock models from the 3D assets.
+				if (!Path.Contains(TEXT("surface")) && KeywordRank(Path, RockWords) != INDEX_NONE && Rocks3D.Num() < MaxBoulderModels)
+				{
+					Rocks3D.Add(&Asset);
+				}
+				continue;
+			}
+
+			// Tiling surfaces only. A 3D model's own material is painted for that model and won't tile on the ground.
+			if (b3D)
+			{
+				continue;
+			}
+			if (const int32 Rank = KeywordRank(Path, RockWords); Rank != INDEX_NONE)
+			{
+				if (Rank < CliffRank) { CliffRank = Rank; BestCliff = &Asset; }
+			}
+			else if (const int32 Mud = KeywordRank(Path, MudWords); Mud != INDEX_NONE)
+			{
+				if (Mud < MudRank) { MudRank = Mud; BestMud = &Asset; }
+			}
+			else if (const int32 Ground = KeywordRank(Path, GroundWords); Ground != INDEX_NONE)
+			{
+				if (Ground < GroundRank) { GroundRank = Ground; BestGround = &Asset; }
+			}
+		}
+
+		if (!UsedGround && BestGround) { UsedGround = Cast<UMaterialInterface>(BestGround->GetAsset()); }
+		if (!UsedMud && BestMud) { UsedMud = Cast<UMaterialInterface>(BestMud->GetAsset()); }
+		if (!UsedCliff && BestCliff) { UsedCliff = Cast<UMaterialInterface>(BestCliff->GetAsset()); }
+		if (UsedBoulders.Num() == 0)
+		{
+			for (const FAssetData* Rock : Rocks3D)
+			{
+				if (UStaticMesh* Mesh = Cast<UStaticMesh>(Rock->GetAsset()))
+				{
+					UsedBoulders.Add(Mesh);
+				}
+			}
+		}
+	}
+
+	// With a Megascans ground but no mud, the ground looks better at the water's edge than a plain brown.
+	if (!UsedMud && UsedGround && !MudMaterial)
+	{
+		UsedMud = UsedGround;
+	}
+}
+
+void AJungleWorld::MakeBoulderSets()
+{
+	// These are made fresh each time the jungle is built, and the old ones are removed with it.
+	Boulders.Reset();
+	for (UStaticMesh* Mesh : UsedBoulders)
+	{
+		UHierarchicalInstancedStaticMeshComponent* Component = NewObject<UHierarchicalInstancedStaticMeshComponent>(this,
+			MakeUniqueObjectName(this, UHierarchicalInstancedStaticMeshComponent::StaticClass(), TEXT("Boulders")));
+		Component->CreationMethod = EComponentCreationMethod::UserConstructionScript;
+		Component->SetupAttachment(RootComponent);
+		Component->SetStaticMesh(Mesh);
+		Component->SetCastShadow(true);
+		// The invisible rock colliders do the colliding.
+		Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Component->RegisterComponent();
+		Boulders.Add(Component);
+	}
+}
+
+void AJungleWorld::AddBoulder(const FVector& Center, const FVector& Size, const FRotator& Rotation)
+{
+	if (Boulders.Num() == 0)
+	{
+		AddShape(Rocks, Center, Size, Rotation);
+		return;
+	}
+
+	// Pick a rock model from where it is, so the rest of the jungle comes out the same with or without Megascans.
+	const int32 Pick = FMath::Abs(FMath::FloorToInt(Center.X * 0.731f + Center.Y * 1.317f + Center.Z * 0.173f)) % Boulders.Num();
+	UHierarchicalInstancedStaticMeshComponent* Component = Boulders[Pick];
+	const UStaticMesh* Mesh = Component->GetStaticMesh();
+
+	// Scale the model evenly so it's about the size asked for, and put its middle at Center.
+	const FBox Box = Mesh->GetBoundingBox();
+	const FVector MeshSize = Box.GetSize();
+	const float Scale = (Size.X + Size.Y + Size.Z) * Meter / FMath::Max(MeshSize.X + MeshSize.Y + MeshSize.Z, 1.f);
+	const FQuat Turn = Rotation.Quaternion();
+	const FVector Location = Center * Meter - Turn.RotateVector(Box.GetCenter() * Scale);
+	QueuedShapes.FindOrAdd(Component).Add(FTransform(Turn, Location, FVector(Scale)));
+
+	// A box a bit smaller than the rock, so you bump into it and can stand on it.
+	AddShape(RockColliders, Center, Size * 0.75f, Rotation);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -521,6 +716,7 @@ void AJungleWorld::BuildTerrain()
 		TArray<FVector> Vertices;
 		TArray<FVector> Normals;
 		TArray<FVector2D> UVs;
+		TArray<FProcMeshTangent> Tangents;
 		TArray<int32> Triangles;
 		TArray<int32> Remap;
 	};
@@ -531,6 +727,7 @@ void AJungleWorld::BuildTerrain()
 	}
 
 	const float RockHeight = WaterLevel + 6.f + MountainHeight * 0.7f;
+	const float TextureSize = GroundTextureSize * Meter;
 	auto AddTriangle = [&](int32 A, int32 B, int32 C)
 	{
 		const float Average = (Heights[A] + Heights[B] + Heights[C]) / 3.f;
@@ -553,7 +750,10 @@ void AJungleWorld::BuildTerrain()
 			{
 				Local = Section.Vertices.Add(Positions[Corner]);
 				Section.Normals.Add(Normals[Corner]);
-				Section.UVs.Add(FVector2D(Positions[Corner].X, Positions[Corner].Y) / 1000.f);
+				Section.UVs.Add(FVector2D(Positions[Corner].X, Positions[Corner].Y) / TextureSize);
+				// Tangents follow the texture's U direction (+X), so normal maps in the ground textures light correctly.
+				const FVector& Normal = Normals[Corner];
+				Section.Tangents.Add(FProcMeshTangent((FVector::ForwardVector - Normal * Normal.X).GetSafeNormal(), false));
 			}
 			Section.Triangles.Add(Local);
 		}
@@ -574,15 +774,24 @@ void AJungleWorld::BuildTerrain()
 	}
 
 	const FLinearColor Colors[Section_Count] = { GrassColor, MudColor, RockColor };
+	UMaterialInterface* const Art[Section_Count] = { UsedGround, UsedMud, UsedCliff };
 	for (int32 Type = 0; Type < Section_Count; ++Type)
 	{
 		FSection& Section = Sections[Type];
 		Terrain->CreateMeshSection_LinearColor(Type, Section.Vertices, Section.Triangles, Section.Normals, Section.UVs, TArray<FLinearColor>(),
-			TArray<FProcMeshTangent>(), true);
+			Section.Tangents, true);
 
-		UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(BaseMaterial, this);
-		Material->SetVectorParameterValue(TEXT("Color"), Colors[Type]);
-		Terrain->SetMaterial(Type, Material);
+		// Megascans art if there is some, otherwise a plain color.
+		if (Art[Type])
+		{
+			Terrain->SetMaterial(Type, Art[Type]);
+		}
+		else
+		{
+			UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(BaseMaterial, this);
+			Material->SetVectorParameterValue(TEXT("Color"), Colors[Type]);
+			Terrain->SetMaterial(Type, Material);
+		}
 	}
 }
 
@@ -758,9 +967,27 @@ void AJungleWorld::BuildRocks(FRandomStream& Random)
 		const float Width = Random.FRandRange(12.f, 28.f);
 		const float Height = Random.FRandRange(50.f, 150.f);
 		const FRotator Tilt(Random.FRandRange(-4.f, 4.f), Random.FRandRange(0.f, 90.f), Random.FRandRange(-4.f, 4.f));
-		AddShape(Rocks, FVector(X, Y, Ground + Height * 0.5f - 6.f), FVector(Width, Width * Random.FRandRange(0.6f, 1.3f), Height), Tilt);
-		// A cap that juts out a little, like Anthem's mesas.
-		AddShape(Rocks, FVector(X, Y, Ground + Height - 6.f), FVector(Width * 1.3f, Width * 1.2f, 5.f), Tilt + FRotator(0.f, 15.f, 0.f));
+		const float Depth = Width * Random.FRandRange(0.6f, 1.3f);
+		if (UsedBoulders.Num() > 0)
+		{
+			// A tower of big rocks stacked on top of each other, with an invisible box around it to land on and bump into.
+			AddShape(RockColliders, FVector(X, Y, Ground + Height * 0.5f - 6.f), FVector(Width * 0.85f, Depth * 0.85f, Height), Tilt);
+			const float Step = Width * 0.7f;
+			for (float Z = Ground - 4.f; Z < Ground + Height - Step * 0.5f; Z += Step)
+			{
+				const FVector Wobble(FMath::Sin(Z * 0.37f + X) * Width * 0.08f, FMath::Cos(Z * 0.29f + Y) * Width * 0.08f, Step * 0.5f);
+				const FRotator Turn(FMath::Sin(Z + Y) * 8.f, Tilt.Yaw + FMath::Fmod(Z * 47.f, 360.f), FMath::Cos(Z + X) * 8.f);
+				AddBoulder(FVector(X, Y, Z) + Wobble, FVector(Width * 1.15f, Depth * 1.15f, Step * 1.3f), Turn);
+			}
+			// A wide, flat cap rock that juts out a little, like Anthem's mesas.
+			AddBoulder(FVector(X, Y, Ground + Height - 6.f), FVector(Width * 1.5f, Width * 1.4f, Width * 0.45f), Tilt + FRotator(0.f, 15.f, 0.f));
+		}
+		else
+		{
+			AddShape(Rocks, FVector(X, Y, Ground + Height * 0.5f - 6.f), FVector(Width, Depth, Height), Tilt);
+			// A cap that juts out a little, like Anthem's mesas.
+			AddShape(Rocks, FVector(X, Y, Ground + Height - 6.f), FVector(Width * 1.3f, Width * 1.2f, 5.f), Tilt + FRotator(0.f, 15.f, 0.f));
+		}
 		++Placed;
 	}
 
@@ -781,8 +1008,17 @@ void AJungleWorld::BuildRocks(FRandomStream& Random)
 			continue;
 		}
 		const float Size = Random.FRandRange(2.f, 11.f);
-		AddShape(Rocks, FVector(X, Y, SampleHeight(X, Y) + Size * 0.15f), FVector(Size, Size * Random.FRandRange(0.6f, 1.2f), Size * Random.FRandRange(0.5f, 0.9f)),
-			FRotator(Random.FRandRange(-25.f, 25.f), Random.FRandRange(0.f, 360.f), Random.FRandRange(-25.f, 25.f)));
+		const FVector Extent(Size, Size * Random.FRandRange(0.6f, 1.2f), Size * Random.FRandRange(0.5f, 0.9f));
+		const FRotator Rotation(Random.FRandRange(-25.f, 25.f), Random.FRandRange(0.f, 360.f), Random.FRandRange(-25.f, 25.f));
+		if (UsedBoulders.Num() > 0)
+		{
+			// Sunk a little into the ground, like a real boulder.
+			AddBoulder(FVector(X, Y, SampleHeight(X, Y) + Extent.Z * 0.3f), Extent, Rotation);
+		}
+		else
+		{
+			AddShape(Rocks, FVector(X, Y, SampleHeight(X, Y) + Size * 0.15f), Extent, Rotation);
+		}
 	}
 }
 
@@ -1040,6 +1276,10 @@ void AJungleWorld::BeginPlay()
 	{
 		SetUpAtmosphere();
 	}
+	if (bSpawnWeather)
+	{
+		SpawnWeather();
+	}
 	if (bSpawnStartArea)
 	{
 		SpawnStartArea();
@@ -1096,6 +1336,17 @@ void AJungleWorld::UpdateWaterCooling()
 	{
 		Heat->RemoveCoolingSource(this);
 		CooledHeat.Reset();
+	}
+}
+
+void AJungleWorld::SpawnWeather()
+{
+	// Runs after the fog and sun are set up, since the weather takes them over.
+	if (!TActorIterator<AJungleWeather>(GetWorld()))
+	{
+		FActorSpawnParameters Params;
+		Params.Owner = this;
+		GetWorld()->SpawnActor<AJungleWeather>(AJungleWeather::StaticClass(), GetActorTransform(), Params);
 	}
 }
 

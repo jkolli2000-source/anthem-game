@@ -3,6 +3,7 @@
 #include "FlightTestArena.h"
 #include "JavelinCharacter.h"
 #include "JavelinHUD.h"
+#include "JungleWeather.h"
 #include "JungleWorld.h"
 
 AJavelinGameMode::AJavelinGameMode()
@@ -28,5 +29,29 @@ void AJavelinGameMode::InitGameState()
 	else if (bSpawnFlightTestArena)
 	{
 		World->SpawnActor<AFlightTestArena>(FVector::ZeroVector, FRotator::ZeroRotator);
+	}
+}
+
+void AJavelinGameMode::JungleTime(float Hour)
+{
+	for (TActorIterator<AJungleWeather> It(GetWorld()); It; ++It)
+	{
+		It->SetTimeOfDay(Hour);
+	}
+}
+
+void AJavelinGameMode::JungleTimeSpeed(float Multiplier)
+{
+	for (TActorIterator<AJungleWeather> It(GetWorld()); It; ++It)
+	{
+		It->SetTimeSpeed(Multiplier);
+	}
+}
+
+void AJavelinGameMode::JungleStorm(float Strength)
+{
+	for (TActorIterator<AJungleWeather> It(GetWorld()); It; ++It)
+	{
+		It->SetStorm(Strength);
 	}
 }
