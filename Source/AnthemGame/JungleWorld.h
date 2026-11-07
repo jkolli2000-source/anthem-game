@@ -126,6 +126,22 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Jungle|Art")
 	TArray<TObjectPtr<UStaticMesh>> BoulderMeshes;
 
+	/** Broadleaf jungle trees. Leave empty to use the Megascans trees you've added (like Electric Dreams' hornbeams). */
+	UPROPERTY(EditAnywhere, Category = "Jungle|Art")
+	TArray<TObjectPtr<UStaticMesh>> TreeMeshes;
+
+	/** Palms, mostly near water. Leave empty to use the Megascans palms you've added. */
+	UPROPERTY(EditAnywhere, Category = "Jungle|Art")
+	TArray<TObjectPtr<UStaticMesh>> PalmMeshes;
+
+	/** Ferns, shrubs and leafy plants on the jungle floor. Leave empty to use the Megascans plants you've added. */
+	UPROPERTY(EditAnywhere, Category = "Jungle|Art")
+	TArray<TObjectPtr<UStaticMesh>> PlantMeshes;
+
+	/** Flowering plants dotted through the undergrowth. Leave empty to use the Megascans flowers you've added. */
+	UPROPERTY(EditAnywhere, Category = "Jungle|Art")
+	TArray<TObjectPtr<UStaticMesh>> FlowerMeshes;
+
 	/** How big one repeat of the ground, mud and cliff textures is. */
 	UPROPERTY(EditAnywhere, Category = "Jungle|Art", meta = (ClampMin = "0.5", ClampMax = "50", Units = "m"))
 	float GroundTextureSize = 4.f;
@@ -259,6 +275,31 @@ protected:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UStaticMesh>> UsedBoulders;
 
+	/** One set of instances per tree, palm, plant and flower model in use. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> TreeSets;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> PalmSets;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> PlantSets;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> FlowerSets;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMesh>> UsedTrees;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMesh>> UsedPalms;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMesh>> UsedPlants;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMesh>> UsedFlowers;
+
 private:
 	/** A flattened spot in the terrain: the start clearing, ruins and caves. */
 	struct FFlatSite
@@ -314,6 +355,17 @@ private:
 
 	/** Makes a set of boulders for each rock model. */
 	void MakeBoulderSets();
+
+	/** Makes a set of instances for each tree, palm, plant or flower model, drawn out to a distance in centimeters. */
+	void MakePlantSets(const TArray<TObjectPtr<UStaticMesh>>& Meshes, TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>& Sets,
+		const TCHAR* Name, int32 CullDistance, float WindDistance);
+
+	/**
+	 * Queues one tree or plant model standing at Base (meters). It's scaled so it's about Height meters tall, within
+	 * MinScale to MaxScale of its real size. Returns the scale used, or 0 if there are no models.
+	 */
+	float AddPlant(const TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>& Sets, const FVector& Base, float Height,
+		float MinScale, float MaxScale, float Yaw, float Tilt = 0.f);
 
 	/** Queues one boulder, fitted to a size in meters and sitting with its middle at Center (meters). */
 	void AddBoulder(const FVector& Center, const FVector& Size, const FRotator& Rotation);

@@ -98,6 +98,27 @@ namespace
 	constexpr int32 MaxBoulderModels = 8;
 	constexpr int32 MaxModelsPerPack = 2;
 
+	// Megascans plants, sorted by the name of their pack. Electric Dreams' jungle trees are European hornbeams.
+	const std::initializer_list<const TCHAR*> TreeWords = { TEXT("hornbeam_forest"), TEXT("jungletree"), TEXT("rainforesttree"), TEXT("kapok") };
+	const std::initializer_list<const TCHAR*> PalmWords = { TEXT("palm") };
+	const std::initializer_list<const TCHAR*> FlowerWords = { TEXT("birdofparadise"), TEXT("amaryllis"), TEXT("lachenalia"), TEXT("windflower"),
+		TEXT("orchid"), TEXT("heliconia") };
+	const std::initializer_list<const TCHAR*> PlantWords = { TEXT("fern"), TEXT("taro"), TEXT("ginger"), TEXT("dracaena"), TEXT("moneyplant"),
+		TEXT("cordyline"), TEXT("croton"), TEXT("castor"), TEXT("arrowhead"), TEXT("monstera"), TEXT("philodendron"), TEXT("shrub"), TEXT("bush") };
+
+	/** How many models of each kind of plant to use, and how many of them may come from the same pack. */
+	constexpr int32 MaxTreeModels = 6;
+	constexpr int32 MaxPalmModels = 8;
+	constexpr int32 MaxPlantModels = 14;
+	constexpr int32 MaxFlowerModels = 4;
+	constexpr int32 MaxTreesPerPack = 6;
+
+	/** Picks one of a few sets from a spot, so the same spot always gets the same model. */
+	int32 PickFromSpot(const FVector& Spot, int32 Count)
+	{
+		return FMath::Abs(FMath::FloorToInt(Spot.X * 0.731f + Spot.Y * 1.317f + Spot.Z * 0.173f)) % FMath::Max(Count, 1);
+	}
+
 	/** A Megascans surface that came as textures only, with no material of its own (like the ones in Electric Dreams). */
 	struct FSurfaceTextures
 	{
@@ -247,6 +268,11 @@ void AJungleWorld::OnConstruction(const FTransform& Transform)
 	{
 		Component->SetCullDistances(FMath::RoundToInt(TreeCull * 0.85f), TreeCull);
 	}
+	// Leaves stop swaying in the wind past these distances, which saves a lot of work for the graphics card.
+	MakePlantSets(UsedTrees, TreeSets, TEXT("Trees"), TreeCull, 120.f * Meter);
+	MakePlantSets(UsedPalms, PalmSets, TEXT("Palms"), TreeCull, 80.f * Meter);
+	MakePlantSets(UsedPlants, PlantSets, TEXT("Plants"), PlantCull, 40.f * Meter);
+	MakePlantSets(UsedFlowers, FlowerSets, TEXT("Flowers"), PlantCull, 30.f * Meter);
 
 	ComputeGrid();
 	BuildTerrain();
@@ -280,8 +306,27 @@ void AJungleWorld::FindArt()
 			UsedBoulders.Add(Mesh);
 		}
 	}
+	auto TakeOverrides = [](const TArray<TObjectPtr<UStaticMesh>>& From, TArray<TObjectPtr<UStaticMesh>>& To)
+	{
+		To.Reset();
+		for (UStaticMesh* Mesh : From)
+		{
+			if (Mesh)
+			{
+				To.Add(Mesh);
+			}
+		}
+	};
+	TakeOverrides(TreeMeshes, UsedTrees);
+	TakeOverrides(PalmMeshes, UsedPalms);
+	TakeOverrides(PlantMeshes, UsedPlants);
+	TakeOverrides(FlowerMeshes, UsedFlowers);
+	const bool bFindTrees = UsedTrees.Num() == 0;
+	const bool bFindPalms = UsedPalms.Num() == 0;
+	const bool bFindPlants = UsedPlants.Num() == 0;
+	const bool bFindFlowers = UsedFlowers.Num() == 0;
 
-	if (bUseMegascans && (!UsedGround || !UsedMud || !UsedCliff || UsedBoulders.Num() == 0))
+	if (bUseMegascans && (!UsedGround || !UsedMud || !UsedCliff || UsedBoulders.Num() == 0 || bFindTrees || bFindPalms || bFindPlants || bFindFlowers))
 	{
 		// Look through everything in the project for Megascans: Fab puts them in Content/Fab/Megascans, and the
 		// older Quixel Bridge in Content/Megascans.
@@ -316,12 +361,45 @@ void AJungleWorld::FindArt()
 		int32 CliffRank = MAX_int32;
 		TArray<const FAssetData*> Rocks3D;
 		TMap<FName, int32> ModelsPerPack;
+		TArray<const FAssetData*> Trees3D;
+		TArray<const FAssetData*> Palms3D;
+		TArray<const FAssetData*> Plants3D;
+		TArray<const FAssetData*> Flowers3D;
 		// Surface textures, by folder.
 		TMap<FName, TArray<const FAssetData*>> SurfaceFolders;
 		for (const TPair<FString, FAssetData>& Entry : Sorted)
 		{
 			const FString& Path = Entry.Key;
 			const FAssetData& Asset = Entry.Value;
+
+			// Trees and plants from the 3D plants. Wind-painted copies (_PP) are skipped; the plain ones sway too.
+			if (Path.Contains(TEXT("/3D_Plants/")) && Asset.IsInstanceOf(UStaticMesh::StaticClass()) && !Path.Contains(TEXT("_PP")))
+			{
+				int32& FromPack = ModelsPerPack.FindOrAdd(Asset.PackagePath);
+				const FString Leaf = Asset.AssetName.ToString();
+				if (bFindTrees && KeywordRank(Leaf, TreeWords) != INDEX_NONE && Trees3D.Num() < MaxTreeModels && FromPack < MaxTreesPerPack)
+				{
+					Trees3D.Add(&Asset);
+					++FromPack;
+				}
+				else if (bFindPalms && KeywordRank(Path, PalmWords) != INDEX_NONE && Palms3D.Num() < MaxPalmModels && FromPack < MaxModelsPerPack)
+				{
+					Palms3D.Add(&Asset);
+					++FromPack;
+				}
+				else if (bFindFlowers && KeywordRank(Path, FlowerWords) != INDEX_NONE && Flowers3D.Num() < MaxFlowerModels && FromPack < MaxModelsPerPack)
+				{
+					Flowers3D.Add(&Asset);
+					++FromPack;
+				}
+				else if (bFindPlants && KeywordRank(Path, PlantWords) != INDEX_NONE && Plants3D.Num() < MaxPlantModels && FromPack < MaxModelsPerPack)
+				{
+					Plants3D.Add(&Asset);
+					++FromPack;
+				}
+				continue;
+			}
+
 			if (Path.Contains(TEXT("plant")) || Path.Contains(TEXT("decal")) || Path.Contains(TEXT("imperfection")) || Path.Contains(TEXT("atlas"))
 				|| Path.Contains(TEXT("imposter")))
 			{
@@ -378,16 +456,24 @@ void AJungleWorld::FindArt()
 		{
 			FindSurfacesFromTextures(Registry, SurfaceFolders);
 		}
-		if (UsedBoulders.Num() == 0)
+		auto Load = [](const TArray<const FAssetData*>& Found, TArray<TObjectPtr<UStaticMesh>>& To)
 		{
-			for (const FAssetData* Rock : Rocks3D)
+			for (const FAssetData* Model : Found)
 			{
-				if (UStaticMesh* Mesh = Cast<UStaticMesh>(Rock->GetAsset()))
+				if (UStaticMesh* Mesh = Cast<UStaticMesh>(Model->GetAsset()))
 				{
-					UsedBoulders.Add(Mesh);
+					To.Add(Mesh);
 				}
 			}
+		};
+		if (UsedBoulders.Num() == 0)
+		{
+			Load(Rocks3D, UsedBoulders);
 		}
+		if (bFindTrees) { Load(Trees3D, UsedTrees); }
+		if (bFindPalms) { Load(Palms3D, UsedPalms); }
+		if (bFindPlants) { Load(Plants3D, UsedPlants); }
+		if (bFindFlowers) { Load(Flowers3D, UsedFlowers); }
 	}
 
 	// With a Megascans ground but no mud, the ground looks better at the water's edge than a plain brown.
@@ -519,6 +605,48 @@ void AJungleWorld::MakeBoulderSets()
 		Component->RegisterComponent();
 		Boulders.Add(Component);
 	}
+}
+
+void AJungleWorld::MakePlantSets(const TArray<TObjectPtr<UStaticMesh>>& Meshes, TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>& Sets,
+	const TCHAR* Name, int32 CullDistance, float WindDistance)
+{
+	Sets.Reset();
+	for (UStaticMesh* Mesh : Meshes)
+	{
+		UHierarchicalInstancedStaticMeshComponent* Component = NewObject<UHierarchicalInstancedStaticMeshComponent>(this,
+			MakeUniqueObjectName(this, UHierarchicalInstancedStaticMeshComponent::StaticClass(), Name));
+		Component->CreationMethod = EComponentCreationMethod::UserConstructionScript;
+		Component->SetupAttachment(RootComponent);
+		Component->SetStaticMesh(Mesh);
+		Component->SetCastShadow(true);
+		// You walk and fly through leaves; tree trunks get invisible colliders instead.
+		Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Component->SetCanEverAffectNavigation(false);
+		Component->SetCullDistances(FMath::RoundToInt(CullDistance * 0.85f), CullDistance);
+		Component->WorldPositionOffsetDisableDistance = FMath::RoundToInt(WindDistance);
+		// Shadows don't redraw every time a leaf moves in the wind. They still follow the sun.
+		Component->ShadowCacheInvalidationBehavior = EShadowCacheInvalidationBehavior::Rigid;
+		Component->RegisterComponent();
+		Sets.Add(Component);
+	}
+}
+
+float AJungleWorld::AddPlant(const TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>& Sets, const FVector& Base, float Height,
+	float MinScale, float MaxScale, float Yaw, float Tilt)
+{
+	if (Sets.Num() == 0)
+	{
+		return 0.f;
+	}
+	UHierarchicalInstancedStaticMeshComponent* Component = Sets[PickFromSpot(Base, Sets.Num())];
+	// Megascans plants are real size, with their pivot at the base.
+	const FBox Box = Component->GetStaticMesh()->GetBoundingBox();
+	const float MeshHeight = FMath::Max(Box.Max.Z, 10.f);
+	const float Scale = FMath::Clamp(Height * Meter / MeshHeight, MinScale, MaxScale);
+	const FRotator Rotation(Tilt * FMath::Sin(Yaw), Yaw, Tilt * FMath::Cos(Yaw));
+	// Sunk in a little so slopes don't leave the roots floating.
+	QueuedShapes.FindOrAdd(Component).Add(FTransform(Rotation, (Base - FVector(0.f, 0.f, 0.15f)) * Meter, FVector(Scale)));
+	return Scale;
 }
 
 void AJungleWorld::AddBoulder(const FVector& Center, const FVector& Size, const FRotator& Rotation)
@@ -1289,6 +1417,21 @@ void AJungleWorld::BuildForest(FRandomStream& Random)
 			const bool bPalm = Random.FRand() < (bNearWater ? 0.7f : 0.15f);
 			const FVector Base(X, Y, Ground);
 
+			if (bPalm && PalmSets.Num() > 0)
+			{
+				const float Scale = AddPlant(PalmSets, Base, Random.FRandRange(4.f, 12.f), 0.9f, 2.2f, Random.FRandRange(0.f, 360.f), Random.FRandRange(0.f, 6.f));
+				AddShape(RockColliders, Base + FVector(0.f, 0.f, 2.f * Scale), FVector(0.5f, 0.5f, 4.f) * Scale);
+				continue;
+			}
+			if (!bPalm && TreeSets.Num() > 0)
+			{
+				// A real broadleaf tree, scaled up a little to rainforest size.
+				const float Height = Random.FRandRange(16.f, 38.f);
+				const float Scale = AddPlant(TreeSets, Base, Height, 0.8f, 2.2f, Random.FRandRange(0.f, 360.f), Random.FRandRange(0.f, 3.f));
+				AddShape(RockColliders, Base + FVector(0.f, 0.f, 4.f * Scale), FVector(0.7f, 0.7f, 8.f) * Scale);
+				continue;
+			}
+
 			if (bPalm)
 			{
 				// A thin leaning trunk with drooping fronds.
@@ -1369,6 +1512,14 @@ void AJungleWorld::BuildUndergrowth(FRandomStream& Random)
 			}
 			const FVector Base(X, Y, SampleHeight(X, Y));
 			const float Pick = Random.FRand();
+			if (PlantSets.Num() > 0)
+			{
+				// Real ferns and leafy plants, with a flower here and there.
+				const bool bFlower = Pick > 0.9f && FlowerSets.Num() > 0;
+				AddPlant(bFlower ? FlowerSets : PlantSets, Base, Random.FRandRange(0.8f, 3.f), 0.8f, 1.8f, Random.FRandRange(0.f, 360.f),
+					Random.FRandRange(0.f, 8.f));
+				continue;
+			}
 			if (Pick < 0.5f)
 			{
 				// A fern: a few long, flat fronds fanning out from the ground.
