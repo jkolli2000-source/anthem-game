@@ -4,7 +4,9 @@
 #include "GameFramework/Actor.h"
 #include "JungleWorld.generated.h"
 
+class IAssetRegistry;
 class UCoolingZoneComponent;
+struct FAssetData;
 class UHierarchicalInstancedStaticMeshComponent;
 class UMaterialInterface;
 class UProceduralMeshComponent;
@@ -306,6 +308,9 @@ private:
 
 	/** Works out which ground, mud, cliff and rock art to use, looking for Megascans if any are missing. */
 	void FindArt();
+
+	/** Makes ground, mud and cliff materials from Megascans surfaces that came as textures only. */
+	void FindSurfacesFromTextures(IAssetRegistry& Registry, const TMap<FName, TArray<const FAssetData*>>& SurfaceFolders);
 
 	/** Makes a set of boulders for each rock model. */
 	void MakeBoulderSets();

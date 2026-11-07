@@ -120,6 +120,8 @@ Megascans are photo-scanned surfaces and rocks. Add a few from **Fab** and the j
 
 How it picks: it looks in **Content/Fab** and **Content/Megascans** for surfaces with words like *forest, moss, ground* (ground), *mud, swamp* (mud) and *rock, cliff, stone* (cliffs), and rock models with *rock, boulder, cliff* or *stone* in their name. If it picks the wrong one, drag a **JungleWorld** into the level and set **Ground Material**, **Mud Material**, **Cliff Material** or **Boulder Meshes** under **Jungle > Art** yourself. **Ground Texture Size** sets how big the ground texture repeats (4 m by default). Turn off **Use Megascans** to go back to plain colors.
 
+**Electric Dreams art:** the rocks and ground surfaces from Epic's free **Electric Dreams Env** sample are Megascans too, and the jungle picks them up the same way once they're in **Content/Megascans** (with **Content/MSPresets** and **Content/Custom/CustomMaterials** for their materials). Its ground surfaces come as textures only, so the jungle builds their materials from the Megascans surface material itself. The project has **Substrate** and **virtual textures** turned on for them.
+
 **Graphics settings for an RTX 3060:** in the editor click **Settings** (top right of the level view) > **Engine Scalability Settings** and pick **High**. **Epic** looks a little better but runs slower. If it's slow, lower the JungleWeather's **Max Raindrops**, turn off **Volumetric Clouds**, or lower the JungleWorld's **Vegetation Density**.
 
 **If it runs slowly:** place a **JungleWorld** in the level as described next, and lower its **Vegetation Density** (for example to 0.5) or **Tree Draw Distance**.

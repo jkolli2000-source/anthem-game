@@ -20,6 +20,8 @@
 #include "Engine/StaticMeshActor.h"
 #include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
+#include "Engine/Texture.h"
+#include "Materials/Material.h"
 #include "Materials/MaterialInstance.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "UObject/ConstructorHelpers.h"
@@ -92,8 +94,17 @@ namespace
 	const std::initializer_list<const TCHAR*> GroundWords = { TEXT("jungle"), TEXT("rainforest"), TEXT("forest_floor"), TEXT("forest"),
 		TEXT("moss"), TEXT("leaves"), TEXT("leaf"), TEXT("ground"), TEXT("soil"), TEXT("grass"), TEXT("dirt"), TEXT("floor") };
 
-	/** Up to this many different rock models are used for the boulders and spires. */
-	constexpr int32 MaxBoulderModels = 6;
+	/** Up to this many different rock models are used for the boulders and spires, and at most two from each pack. */
+	constexpr int32 MaxBoulderModels = 8;
+	constexpr int32 MaxModelsPerPack = 2;
+
+	/** A Megascans surface that came as textures only, with no material of its own (like the ones in Electric Dreams). */
+	struct FSurfaceTextures
+	{
+		UTexture* Albedo = nullptr;
+		UTexture* Normal = nullptr;
+		UTexture* Packed = nullptr;	// ambient occlusion, roughness and displacement in one
+	};
 
 	/** Like FMath::Min, but rounds off the corner where the two meet. */
 	float SmoothMin(float A, float B, float Smoothing)
@@ -281,6 +292,7 @@ void AJungleWorld::FindArt()
 		Filter.bRecursiveClasses = true;
 		Filter.ClassPaths.Add(UMaterialInstance::StaticClass()->GetClassPathName());
 		Filter.ClassPaths.Add(UStaticMesh::StaticClass()->GetClassPathName());
+		Filter.ClassPaths.Add(UTexture::StaticClass()->GetClassPathName());
 		TArray<FAssetData> Assets;
 		Registry.GetAssets(Filter, Assets);
 
@@ -303,6 +315,9 @@ void AJungleWorld::FindArt()
 		int32 MudRank = MAX_int32;
 		int32 CliffRank = MAX_int32;
 		TArray<const FAssetData*> Rocks3D;
+		TMap<FName, int32> ModelsPerPack;
+		// Surface textures, by folder.
+		TMap<FName, TArray<const FAssetData*>> SurfaceFolders;
 		for (const TPair<FString, FAssetData>& Entry : Sorted)
 		{
 			const FString& Path = Entry.Key;
@@ -317,9 +332,20 @@ void AJungleWorld::FindArt()
 			if (Asset.IsInstanceOf(UStaticMesh::StaticClass()))
 			{
 				// Rock models from the 3D assets.
-				if (!Path.Contains(TEXT("surface")) && KeywordRank(Path, RockWords) != INDEX_NONE && Rocks3D.Num() < MaxBoulderModels)
+				int32& FromPack = ModelsPerPack.FindOrAdd(Asset.PackagePath);
+				if (!Path.Contains(TEXT("surface")) && KeywordRank(Path, RockWords) != INDEX_NONE && Rocks3D.Num() < MaxBoulderModels
+					&& FromPack < MaxModelsPerPack)
 				{
 					Rocks3D.Add(&Asset);
+					++FromPack;
+				}
+				continue;
+			}
+			if (Asset.IsInstanceOf(UTexture::StaticClass()))
+			{
+				if (!b3D && Path.Contains(TEXT("/Surfaces/")) && !Path.Contains(TEXT("water")))
+				{
+					SurfaceFolders.FindOrAdd(Asset.PackagePath).Add(&Asset);
 				}
 				continue;
 			}
@@ -346,6 +372,12 @@ void AJungleWorld::FindArt()
 		if (!UsedGround && BestGround) { UsedGround = Cast<UMaterialInterface>(BestGround->GetAsset()); }
 		if (!UsedMud && BestMud) { UsedMud = Cast<UMaterialInterface>(BestMud->GetAsset()); }
 		if (!UsedCliff && BestCliff) { UsedCliff = Cast<UMaterialInterface>(BestCliff->GetAsset()); }
+
+		// Surfaces that came as textures only get a material made for them here, from the Megascans surface material.
+		if ((!UsedGround || !UsedMud || !UsedCliff) && SurfaceFolders.Num() > 0)
+		{
+			FindSurfacesFromTextures(Registry, SurfaceFolders);
+		}
 		if (UsedBoulders.Num() == 0)
 		{
 			for (const FAssetData* Rock : Rocks3D)
@@ -362,6 +394,111 @@ void AJungleWorld::FindArt()
 	if (!UsedMud && UsedGround && !MudMaterial)
 	{
 		UsedMud = UsedGround;
+	}
+}
+
+void AJungleWorld::FindSurfacesFromTextures(IAssetRegistry& Registry, const TMap<FName, TArray<const FAssetData*>>& SurfaceFolders)
+{
+	// The Megascans surface material. Electric Dreams keeps it in Content/MSPresets.
+	FARFilter Filter;
+	Filter.PackagePaths.Add(TEXT("/Game"));
+	Filter.bRecursivePaths = true;
+	Filter.ClassPaths.Add(UMaterial::StaticClass()->GetClassPathName());
+	TArray<FAssetData> Materials;
+	Registry.GetAssets(Filter, Materials);
+	UMaterialInterface* SurfaceMaterial = nullptr;
+	UMaterialInterface* SurfaceMaterialVT = nullptr;
+	for (const FAssetData& Asset : Materials)
+	{
+		if (Asset.AssetName == TEXT("M_MS_Surface_Material"))
+		{
+			SurfaceMaterial = Cast<UMaterialInterface>(Asset.GetAsset());
+		}
+		else if (Asset.AssetName == TEXT("M_MS_Surface_Material_VT"))
+		{
+			SurfaceMaterialVT = Cast<UMaterialInterface>(Asset.GetAsset());
+		}
+	}
+	if (!SurfaceMaterial && !SurfaceMaterialVT)
+	{
+		return;
+	}
+
+	// Sort each folder's textures into color (_BC), normal (_N) and the packed AO, roughness and displacement map.
+	auto Gather = [](const TArray<const FAssetData*>& Textures)
+	{
+		FSurfaceTextures Set;
+		for (const FAssetData* Texture : Textures)
+		{
+			const FString Name = Texture->AssetName.ToString();
+			if (Name.EndsWith(TEXT("_BC")) && !Set.Albedo) { Set.Albedo = Cast<UTexture>(Texture->GetAsset()); }
+			else if (Name.EndsWith(TEXT("_N")) && !Set.Normal) { Set.Normal = Cast<UTexture>(Texture->GetAsset()); }
+			else if ((Name.Contains(TEXT("AoRD")) || Name.Contains(TEXT("ORD"))) && !Set.Packed) { Set.Packed = Cast<UTexture>(Texture->GetAsset()); }
+		}
+		return Set;
+	};
+
+	// Pick a folder for each kind of ground. Mossy surfaces win among the rocks, since this is a jungle.
+	TArray<FName> Folders;
+	SurfaceFolders.GetKeys(Folders);
+	Folders.Sort([](const FName& A, const FName& B) { return A.ToString() < B.ToString(); });
+	FName Picks[3];	// ground, mud, cliff
+	int32 Ranks[3] = { MAX_int32, MAX_int32, MAX_int32 };
+	for (const FName& Folder : Folders)
+	{
+		const FString Name = Folder.ToString();
+		const int32 Slash = Name.Find(TEXT("/"), ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+		const FString Leaf = Slash == INDEX_NONE ? Name : Name.Mid(Slash + 1);
+		int32 Kind = INDEX_NONE;
+		int32 Rank = INDEX_NONE;
+		if ((Rank = KeywordRank(Leaf, RockWords)) != INDEX_NONE)
+		{
+			Kind = 2;
+			Rank = Rank * 2 - (Leaf.Contains(TEXT("moss")) ? 1 : 0);
+		}
+		else if ((Rank = KeywordRank(Leaf, MudWords)) != INDEX_NONE)
+		{
+			Kind = 1;
+		}
+		else if ((Rank = KeywordRank(Leaf, GroundWords)) != INDEX_NONE)
+		{
+			Kind = 0;
+		}
+		if (Kind != INDEX_NONE && Rank < Ranks[Kind])
+		{
+			const FSurfaceTextures Set = Gather(SurfaceFolders[Folder]);
+			if (Set.Albedo && Set.Normal)
+			{
+				Ranks[Kind] = Rank;
+				Picks[Kind] = Folder;
+			}
+		}
+	}
+
+	TObjectPtr<UMaterialInterface>* Slots[3] = { &UsedGround, &UsedMud, &UsedCliff };
+	for (int32 Kind = 0; Kind < 3; ++Kind)
+	{
+		if (*Slots[Kind] || Picks[Kind].IsNone())
+		{
+			continue;
+		}
+		const FSurfaceTextures Set = Gather(SurfaceFolders[Picks[Kind]]);
+		// Virtual textures need the virtual texture version of the material, and regular ones the regular one.
+		UMaterialInterface* Parent = Set.Albedo->VirtualTextureStreaming ? SurfaceMaterialVT : SurfaceMaterial;
+		if (!Parent)
+		{
+			continue;
+		}
+		UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(Parent, this);
+		Material->SetTextureParameterValue(TEXT("Albedo"), Set.Albedo);
+		Material->SetTextureParameterValue(TEXT("Normal"), Set.Normal);
+		if (Set.Packed)
+		{
+			Material->SetTextureParameterValue(TEXT("AO/R/D"), Set.Packed);
+		}
+		// The terrain's own texture coordinates already repeat every Ground Texture Size.
+		Material->SetScalarParameterValue(TEXT("Tiling"), 1.f);
+		*Slots[Kind] = Material;
 	}
 }
 
