@@ -27,6 +27,12 @@ struct FJavelinEnemyPaintedPart
  * warning. When it loses track of you for a while, or you lead it too far
  * from where it started, it gives up and goes home.
  *
+ * Hits have weight: every shot makes the body flinch away from it and
+ * shoves it back a little, explosions throw it, and enough damage in a
+ * short time (or a shot to the weak spot while it's flaring) staggers it,
+ * cancelling its volley. When it dies a soldier topples over and a drone
+ * loses power and falls, trailing smoke, until it hits the ground.
+ *
  * Enemies don't use the navigation system, so they need no nav mesh in the
  * level: soldiers walk straight at you and slide along walls, drones fly.
  * Subclasses build the body and decide how to move.
@@ -108,6 +114,22 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Attack", meta = (ClampMin = "0", ClampMax = "1"))
 	float AimLead = 0.5f;
 
+	/** Heavier enemies get pushed less by shots and blasts. 1 is normal. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Hit Reactions", meta = (ClampMin = "0.1"))
+	float Mass = 1.f;
+
+	/** Taking this fraction of its max health within a couple of seconds staggers it. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Hit Reactions", meta = (ClampMin = "0", ClampMax = "1"))
+	float StaggerDamageFraction = 0.3f;
+
+	/** How long a stagger stops it shooting and slows it down. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Hit Reactions", meta = (ClampMin = "0", Units = "s"))
+	float StaggerTime = 0.9f;
+
+	/** How far a hit tips the body, in degrees per second of kick per point of damage. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Hit Reactions", meta = (ClampMin = "0"))
+	float FlinchPerDamage = 9.f;
+
 	/** Chance of dropping a health orb, and of dropping an ammo orb, when killed. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy|Drops", meta = (ClampMin = "0", ClampMax = "1"))
 	float HealthDropChance = 0.4f;
@@ -129,6 +151,13 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Enemy")
 	bool IsAlive() const { return Health > 0.f; }
+
+	/** True while it's reeling from heavy damage: it can't shoot and barely moves. */
+	UFUNCTION(BlueprintPure, Category = "Enemy")
+	bool IsStaggered() const { return StaggerRemaining > 0.f; }
+
+	/** Shoves it, in cm/s. Shots push a little, explosions a lot. A falling wreck gets knocked along too. */
+	void ApplyKnockback(const FVector& Impulse);
 
 	UFUNCTION(BlueprintPure, Category = "Enemy")
 	float GetHealthPercent() const { return Health / MaxHealth; }
@@ -157,6 +186,9 @@ protected:
 
 	/** Legs, spinning parts and so on. */
 	virtual void UpdateAnimation(float DeltaSeconds) {}
+
+	/** Plays the death: by default it topples over away from the killing blow, lies there, then sinks away. */
+	virtual void UpdateDeath(float DeltaSeconds);
 
 	/** Turns to face Target, or its direction of travel when Target is null. */
 	virtual void UpdateFacing(float DeltaSeconds, const AJavelinCharacter* Target);
@@ -208,6 +240,22 @@ protected:
 	FVector HomeLocation = FVector::ZeroVector;
 	FVector MoveVelocity = FVector::ZeroVector;
 
+	/** Push from hits and blasts, fading out. Added on top of its own movement. */
+	FVector KnockbackVelocity = FVector::ZeroVector;
+
+	/** Flying enemies can be knocked up and down; walkers only get pushed along the ground. */
+	bool bCanBeKnockedUp = false;
+
+	/** True once killed, while the death plays out. */
+	bool bDying = false;
+	float DeathTime = 0.f;
+
+	/** Which way the killing blow was going. */
+	FVector DeathDirection = FVector::ForwardVector;
+
+	/** How fast a falling wreck is moving. */
+	FVector DeathVelocity = FVector::ZeroVector;
+
 	static const FName PaintBody;
 	static const FName PaintArmor;
 	static const FName PaintWeakSpot;
@@ -218,6 +266,8 @@ private:
 	void FireProjectile(const AJavelinCharacter* Target);
 	bool CanSee(const AJavelinCharacter* Player) const;
 	void UpdatePaint(float DeltaSeconds);
+	void UpdateHitReactions(float DeltaSeconds);
+	void Stagger();
 	void Die();
 
 	TArray<FJavelinEnemyPaintedPart> PaintedParts;
@@ -238,4 +288,18 @@ private:
 	bool bEngaged = false;
 	bool bWindingUp = false;
 	bool bCanSeePlayer = false;
+
+	/** Body tipping from hits, in degrees, and how fast. A spring pulls it back upright. */
+	float FlinchPitch = 0.f;
+	float FlinchRoll = 0.f;
+	float FlinchPitchSpeed = 0.f;
+	float FlinchRollSpeed = 0.f;
+
+	/** The body's rotation from its own animation, before flinching is added on top. */
+	FRotator BodyRestRotation = FRotator::ZeroRotator;
+
+	/** Recent damage, draining over time. Too much at once staggers it. */
+	float RecentDamage = 0.f;
+	float StaggerRemaining = 0.f;
+	bool bSankDust = false;
 };
