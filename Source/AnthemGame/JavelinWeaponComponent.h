@@ -23,6 +23,7 @@ struct FJavelinDamageNumber
  * Shots are instant line traces from the camera, so they go where the
  * crosshair points, then checked from the muzzle so you can't shoot through
  * a wall next to you. Hitting a part tagged "WeakSpot" does extra damage.
+ * It damages anything that takes damage: shooting range targets and enemies.
  *
  * The owner must be an AJavelinCharacter; it decides when the gun can be used
  * (not while flying) and gives the component its muzzle point.
@@ -106,6 +107,10 @@ public:
 	/** Fills the magazine and reserve, as at an ammo crate. Returns false if they were already full. */
 	UFUNCTION(BlueprintCallable, Category = "Weapon")
 	bool RefillAmmo();
+
+	/** Adds rounds to the reserve, as from an ammo orb. Returns false if the reserve was already full. */
+	UFUNCTION(BlueprintCallable, Category = "Weapon")
+	bool AddReserveAmmo(int32 Rounds);
 
 	UFUNCTION(BlueprintPure, Category = "Weapon")
 	bool IsAiming() const;

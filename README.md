@@ -2,7 +2,7 @@
 
 A flying exosuit ("javelin") action game inspired by Anthem, built in **Unreal Engine 5** with C++.
 
-**Current milestone: 1, flight feel.** You can walk, sprint, jump, hover and fly a placeholder Ranger suit around a graybox course. Flying builds **heat**; overheat and you drop out of the sky until the suit cools. Water, the waterfall and steep dives cool you down. You also carry an **assault rifle** with aiming, ammo, reloads and hit effects, and there's a shooting range next to the start.
+**Current milestone: 1, flight feel.** You can walk, sprint, jump, hover and fly a placeholder Ranger suit around a graybox course. Flying builds **heat**; overheat and you drop out of the sky until the suit cools. Water, the waterfall and steep dives cool you down. You also carry an **assault rifle** with aiming, ammo, reloads and hit effects, and there's a shooting range next to the start. Your suit has **shields and armor**, and an **enemy camp** sends waves of ground soldiers and flying drones that chase you and shoot back.
 
 The full design is in the project's UE5 implementation plan. Characters are placeholder shapes for now; art comes later.
 
@@ -87,6 +87,10 @@ You can shoot on the ground, while jumping or falling, and while hovering. Like 
 - **Aim down sights:** hold the right mouse button to zoom over the shoulder and tighten your spread. Long bursts bloom the crosshair; let go briefly to recover accuracy.
 - **Hover and shoot:** jump, press **Space** to hover, and shoot the drones in the air.
 - **Ammo:** a magazine holds 30 rounds and reloads automatically when empty (or press **R**). When your reserve runs out, walk up to the green crate with the yellow stripe to refill.
+- **Fight the enemy camp:** turn around from the start and follow the red **ENEMY CAMP** marker (about 110 m away, behind and to the left). Soldiers walk toward you and fire bursts of red bolts; drones circle above you and fire big purple orbs. Their weak spots glow (soldiers: the visor and the power cell on the back; drones: the eye) and flare bright just before they fire, so watch for the flash and dodge. Clear a wave and a bigger one arrives after 12 seconds.
+- **Shields and armor:** the blue bar (bottom left) is shields, the orange bar is armor. Hits take shields first; shields recharge on their own after 4 seconds without being hit, so duck behind a wall. Armor doesn't recharge: pick up the **green orbs** enemies drop. **White orbs** give ammo. Red arcs around the crosshair point toward whoever is shooting you.
+- **Going down:** if your armor runs out the suit goes down and reboots back at the start after 5 seconds, with everything refilled.
+- **Fly to escape:** soldiers can't follow you into the air, but drones can.
 - **Land:** fly down onto the ground or the landing tower near the start. Fly into a wall head-on at speed and you'll be knocked out of the air.
 
 ### Tuning while you play
@@ -97,6 +101,8 @@ Every value is exposed in the editor. While playing, press **F8** to detach from
 - **Heat** for heat gain and cooling rates.
 - **Camera** for the camera profile used on foot, sprinting, hovering, flying and aiming.
 - **Weapon** for damage, fire rate, magazine size, reload time, spread and recoil.
+- **Suit Health** for shields, armor and how fast shields recharge.
+- To tune enemies, select one of them (they're listed as **EnemySoldier** and **EnemyDrone** in the Outliner while playing) and look under **Enemy**: health, speed, sight range, damage, fire rate, aim. The **EnemyEncounter** actor has the wave sizes.
 
 Changes made while playing are lost when you stop. To keep a value, change its default in the C++ files under `Source/AnthemGame` (or ask for a change).
 
@@ -110,13 +116,20 @@ Changes made while playing are lost when you stop. To keep a value, change its d
 | `JavelinMovementComponent` | Movement: walk, sprint, jump, plus custom **Flight** and **Hover** modes. |
 | `JavelinHeatComponent` | Heat meter: gain while flying or hovering, cooling, overheat lockout. |
 | `CoolingVolume` | A box that cools the suit (water, waterfalls). Drag `CoolingVolume` into any level. |
-| `FlightTestArena` | The graybox course, built from simple boxes, plus the shooting range. |
+| `FlightTestArena` | The graybox course, built from simple boxes, plus the shooting range and enemy camp. |
 | `JavelinGameMode` | Spawns the javelin, HUD and course. |
 | `JavelinWeaponComponent` | The gun: firing, ammo, reloading, aiming, spread, recoil, weak spot damage. |
 | `ShotEffect` | Tracer, impact flash, puff and sparks for each shot, built from basic shapes. |
 | `ShootingTarget` | Dummies and drones to shoot. Flash when hit, blow up, respawn. |
 | `AmmoCrate` | Refills your ammo when you walk up to it. |
-| `JavelinHUD` | Crosshair, hit markers, damage numbers, target health bars, ammo, heat bar, speed and controls reminder. |
+| `JavelinSuitHealthComponent` | Shields and armor: shields soak damage first and recharge, armor is repaired by orbs, the suit goes down at zero. |
+| `JavelinEnemy` | Base for enemies: health, weak spots, spotting the player, chasing, firing volleys, dropping orbs. |
+| `EnemySoldier` | Ground trooper that walks toward you, strafes and fires rifle bursts. |
+| `EnemyDrone` | Flying drone that circles above you and fires slow, heavy orbs. |
+| `EnemyProjectile` | The glowing bolts enemies fire. Visible and dodgeable. |
+| `EnemyEncounter` | The enemy camp: spawns waves of soldiers and drones, bigger each time. |
+| `PickupOrb` | Green (armor) and white (ammo) orbs dropped by enemies. |
+| `JavelinHUD` | Crosshair, hit markers, damage numbers, health bars, ammo, shields and armor, damage direction, heat bar, wave status, speed and controls reminder. |
 
 Input is created in code, so no input assets are needed yet. The plan's next milestone moves heat and flight into the Gameplay Ability System.
 

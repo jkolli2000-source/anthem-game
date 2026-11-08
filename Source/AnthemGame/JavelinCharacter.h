@@ -13,6 +13,7 @@ class UInputAction;
 class UInputMappingContext;
 class UJavelinHeatComponent;
 class UJavelinMovementComponent;
+class UJavelinSuitHealthComponent;
 class UJavelinWeaponComponent;
 class UPointLightComponent;
 struct FInputActionValue;
@@ -63,6 +64,10 @@ struct FJavelinSuitPose
  *  - F / Y: take off into flight from anywhere.
  *  - Left mouse / right trigger: fire. Right mouse / left trigger: hold to aim down sights.
  *  - R / X: reload. You can shoot on the ground, in the air and while hovering, but not while flying.
+ *
+ * The suit has shields and armor (UJavelinSuitHealthComponent). When the armor
+ * runs out the suit goes down, and after a few seconds it reboots back at
+ * the start with everything restored.
  */
 UCLASS()
 class ANTHEMGAME_API AJavelinCharacter : public ACharacter
@@ -75,6 +80,7 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 	virtual void PawnClientRestart() override;
+	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser) override;
 
 	UFUNCTION(BlueprintPure, Category = "Javelin")
 	UJavelinMovementComponent* GetJavelinMovement() const;
@@ -84,6 +90,16 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Javelin")
 	UJavelinWeaponComponent* GetWeapon() const { return Weapon; }
+
+	UFUNCTION(BlueprintPure, Category = "Javelin")
+	UJavelinSuitHealthComponent* GetSuitHealth() const { return SuitHealth; }
+
+	/** True while the suit is down and rebooting. It can't move or shoot. */
+	UFUNCTION(BlueprintPure, Category = "Javelin")
+	bool IsSuitDown() const;
+
+	/** Seconds until a downed suit reboots. */
+	float GetTimeUntilReboot() const;
 
 	/** Guns are stowed while flying, like in Anthem. Hover to shoot from the air. */
 	UFUNCTION(BlueprintPure, Category = "Javelin")
@@ -113,6 +129,17 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UJavelinWeaponComponent> Weapon;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UJavelinSuitHealthComponent> SuitHealth;
+
+	/** How long the suit stays down before it reboots. */
+	UPROPERTY(EditAnywhere, Category = "Javelin|Health", meta = (ClampMin = "0", Units = "s"))
+	float RebootTime = 5.f;
+
+	/** Reboot back where you started instead of where you went down. */
+	UPROPERTY(EditAnywhere, Category = "Javelin|Health")
+	bool bRebootAtStart = true;
 
 	/** Root of the mech suit, built from basic shapes. Tilted for flight pitch and banking. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
@@ -302,6 +329,15 @@ private:
 
 	UFUNCTION()
 	void HandleOverheated();
+
+	UFUNCTION()
+	void HandleSuitDown();
+
+	void Reboot();
+
+	FTimerHandle RebootTimer;
+	FVector StartLocation = FVector::ZeroVector;
+	FRotator StartRotation = FRotator::ZeroRotator;
 
 	void UpdateCamera(float DeltaSeconds);
 	void UpdateVisuals(float DeltaSeconds);

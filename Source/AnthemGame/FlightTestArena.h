@@ -13,7 +13,9 @@ class UCoolingZoneComponent;
  * different heights, arches to fly through, a landing tower, and a lake with
  * a waterfall that cool the suit. Next to the start there is a shooting
  * range: training dummies, strafing dummies, floating drones to shoot while
- * hovering, low cover walls and an ammo crate.
+ * hovering, low cover walls and an ammo crate. Behind and to the left of the
+ * start there's an enemy camp with cover, where waves of soldiers and drones
+ * fight back.
  *
  * The game mode spawns one at play time if the level has none. You can also
  * drag one into a level from the Place Actors panel to see and tweak it.
@@ -38,6 +40,10 @@ public:
 	/** Spawns the targets and ammo crate when play starts. */
 	UPROPERTY(EditAnywhere, Category = "Arena")
 	bool bSpawnShootingRange = true;
+
+	/** Spawns the enemy camp, which sends waves of soldiers and drones. */
+	UPROPERTY(EditAnywhere, Category = "Arena")
+	bool bSpawnEnemies = true;
 
 	UPROPERTY(EditAnywhere, Category = "Arena")
 	FLinearColor GroundColor = FLinearColor(0.12f, 0.14f, 0.11f);
@@ -72,6 +78,7 @@ protected:
 
 private:
 	void SpawnShootingRange();
+	void SpawnEnemyCamp();
 	void SetColor(UInstancedStaticMeshComponent* Component, const FLinearColor& Color);
 
 	/** Adds a box by center and full size in centimeters. */
