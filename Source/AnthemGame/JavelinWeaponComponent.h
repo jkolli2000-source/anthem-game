@@ -115,6 +115,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Weapon")
 	bool IsAiming() const;
 
+	/** True when the center of the crosshair is on a living enemy or target, so the HUD can turn it red. */
+	UFUNCTION(BlueprintPure, Category = "Weapon")
+	bool IsCrosshairOnTarget() const;
+
 	UFUNCTION(BlueprintPure, Category = "Weapon")
 	bool IsReloading() const { return bReloading; }
 
@@ -147,6 +151,9 @@ protected:
 private:
 	bool CanFire() const;
 	void FireShot();
+
+	/** Traces from the camera along Direction, starting level with the suit. Returns the point the crosshair is on. */
+	FVector TraceFromView(const FVector& ViewLocation, const FVector& Direction, FHitResult& OutHit, bool& bOutHit) const;
 	void FinishReload();
 
 	UPROPERTY(Transient)

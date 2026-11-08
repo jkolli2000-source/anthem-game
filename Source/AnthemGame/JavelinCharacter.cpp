@@ -72,17 +72,21 @@ AJavelinCharacter::AJavelinCharacter(const FObjectInitializer& ObjectInitializer
 	bUseControllerRotationYaw = false;
 	bUseControllerRotationRoll = false;
 
-	GroundCamera = MakeCameraProfile(350.f, FVector(0.f, 60.f, 60.f), 90.f, 15.f);
-	SprintCamera = MakeCameraProfile(390.f, FVector(0.f, 50.f, 50.f), 98.f, 12.f);
-	HoverCamera = MakeCameraProfile(300.f, FVector(0.f, 80.f, 70.f), 85.f, 15.f);
-	FlightCamera = MakeCameraProfile(650.f, FVector(0.f, 0.f, 110.f), 100.f, 8.f);
-	AimCamera = MakeCameraProfile(170.f, FVector(0.f, 75.f, 65.f), 60.f, 30.f);
+	// Anthem-style framing: on foot the camera sits over the right shoulder, so the suit stands left of center and
+	// the crosshair has a clear view past it. Aiming pulls in tight over the shoulder. Flight drops the shoulder
+	// offset and pulls far back so the suit is centered and you can see where you're going.
+	GroundCamera = MakeCameraProfile(300.f, FVector(0.f, 100.f, 30.f), 80.f, 15.f);
+	SprintCamera = MakeCameraProfile(340.f, FVector(0.f, 85.f, 30.f), 90.f, 12.f);
+	HoverCamera = MakeCameraProfile(320.f, FVector(0.f, 100.f, 35.f), 82.f, 15.f);
+	FlightCamera = MakeCameraProfile(850.f, FVector(0.f, 0.f, 90.f), 100.f, 6.f);
+	AimCamera = MakeCameraProfile(170.f, FVector(0.f, 85.f, 20.f), 58.f, 30.f);
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
+	CameraBoom->SetRelativeLocation(FVector(0.f, 0.f, CameraPivotHeight));
 	CameraBoom->bUsePawnControlRotation = true;
 	CameraBoom->bEnableCameraLag = true;
-	CameraBoom->CameraLagMaxDistance = 400.f;
+	CameraBoom->CameraLagMaxDistance = 600.f;
 	CameraBoom->TargetArmLength = GroundCamera.ArmLength;
 	CameraBoom->SocketOffset = GroundCamera.SocketOffset;
 	CameraBoom->CameraLagSpeed = GroundCamera.LagSpeed;
@@ -258,6 +262,9 @@ UJavelinMovementComponent* AJavelinCharacter::GetJavelinMovement() const
 void AJavelinCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Picks up a pivot height changed in the editor.
+	CameraBoom->SetRelativeLocation(FVector(0.f, 0.f, CameraPivotHeight));
 
 	struct FPaintSlot
 	{
@@ -754,6 +761,10 @@ void AJavelinCharacter::UpdateCamera(float DeltaSeconds)
 	CameraBoom->SocketOffset = FMath::VInterpTo(CameraBoom->SocketOffset, Target->SocketOffset, DeltaSeconds, BlendSpeed);
 	CameraBoom->CameraLagSpeed = FMath::FInterpTo(CameraBoom->CameraLagSpeed, Target->LagSpeed, DeltaSeconds, BlendSpeed);
 	FollowCamera->SetFieldOfView(FMath::FInterpTo(FollowCamera->FieldOfView, Target->FieldOfView + ExtraFOV, DeltaSeconds, BlendSpeed));
+
+	// Backed up against a wall the camera ends up inside the suit; hide it rather than show its insides.
+	const float CameraDistance = FVector::Dist(FollowCamera->GetComponentLocation(), CameraBoom->GetComponentLocation());
+	VisualRoot->SetHiddenInGame(CameraDistance < HideSuitCameraDistance, true);
 }
 
 void AJavelinCharacter::UpdateVisuals(float DeltaSeconds)

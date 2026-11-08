@@ -117,17 +117,10 @@ void UJavelinWeaponComponent::FireShot()
 	Controller->GetPlayerViewPoint(ViewLocation, ViewRotation);
 	const FVector ShotDirection = FMath::VRandCone(ViewRotation.Vector(), FMath::DegreesToRadians(GetCurrentSpread() * 0.5f));
 
-	// Start level with the suit so nothing between the camera and the suit gets hit.
-	const float SkipDistance = FMath::Max(0.f, FVector::DotProduct(Pawn->GetActorLocation() - ViewLocation, ShotDirection));
-	const FVector TraceStart = ViewLocation + ShotDirection * SkipDistance;
-
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(JavelinWeapon), false, Pawn);
 	FHitResult Hit;
-	FVector AimPoint = TraceStart + ShotDirection * Range;
-	if (World->LineTraceSingleByChannel(Hit, TraceStart, AimPoint, ECC_Visibility, Params))
-	{
-		AimPoint = Hit.ImpactPoint;
-	}
+	bool bViewHit = false;
+	const FVector AimPoint = TraceFromView(ViewLocation, ShotDirection, Hit, bViewHit);
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(JavelinWeapon), false, Pawn);
 
 	// Then check from the gun itself, so a wall right next to you blocks the shot.
 	const FVector MuzzleLocation = Muzzle ? Muzzle->GetComponentLocation() : Pawn->GetActorLocation();
@@ -175,6 +168,37 @@ void UJavelinWeaponComponent::FireShot()
 	{
 		StartReload();
 	}
+}
+
+FVector UJavelinWeaponComponent::TraceFromView(const FVector& ViewLocation, const FVector& Direction, FHitResult& OutHit, bool& bOutHit) const
+{
+	const AActor* Owner = GetOwner();
+	// Start level with the suit so nothing between the camera and the suit gets hit.
+	const float SkipDistance = FMath::Max(0.f, FVector::DotProduct(Owner->GetActorLocation() - ViewLocation, Direction));
+	const FVector TraceStart = ViewLocation + Direction * SkipDistance;
+	const FVector TraceEnd = TraceStart + Direction * Range;
+
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(JavelinWeapon), false, Owner);
+	bOutHit = GetWorld()->LineTraceSingleByChannel(OutHit, TraceStart, TraceEnd, ECC_Visibility, Params);
+	return bOutHit ? FVector(OutHit.ImpactPoint) : TraceEnd;
+}
+
+bool UJavelinWeaponComponent::IsCrosshairOnTarget() const
+{
+	const APawn* Pawn = Cast<APawn>(GetOwner());
+	const AController* Controller = Pawn ? Pawn->GetController() : nullptr;
+	if (!Controller)
+	{
+		return false;
+	}
+
+	FVector ViewLocation;
+	FRotator ViewRotation;
+	Controller->GetPlayerViewPoint(ViewLocation, ViewRotation);
+	FHitResult Hit;
+	bool bHit = false;
+	TraceFromView(ViewLocation, ViewRotation.Vector(), Hit, bHit);
+	return bHit && IsLivingTarget(Hit.GetActor());
 }
 
 bool UJavelinWeaponComponent::StartReload()

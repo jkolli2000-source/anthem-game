@@ -25,10 +25,11 @@ struct FJavelinCameraProfile
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
-	float ArmLength = 350.f;
+	float ArmLength = 300.f;
 
+	/** Where the camera sits relative to the shoulder pivot. Positive Y puts it over the right shoulder. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
-	FVector SocketOffset = FVector(0.f, 60.f, 60.f);
+	FVector SocketOffset = FVector(0.f, 100.f, 30.f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera")
 	float FieldOfView = 90.f;
@@ -275,6 +276,14 @@ protected:
 	/** How quickly the camera blends to a new profile. */
 	UPROPERTY(EditAnywhere, Category = "Camera")
 	float CameraBlendSpeed = 4.f;
+
+	/** Height of the camera's pivot above the middle of the capsule, about shoulder height, so looking up and down turns around the shoulders. */
+	UPROPERTY(EditAnywhere, Category = "Camera")
+	float CameraPivotHeight = 60.f;
+
+	/** Hide the suit when a wall pushes the camera closer than this, so it never fills the screen. */
+	UPROPERTY(EditAnywhere, Category = "Camera")
+	float HideSuitCameraDistance = 90.f;
 
 	/** Extra field of view at full flight boost, for a sense of speed. */
 	UPROPERTY(EditAnywhere, Category = "Camera")

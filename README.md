@@ -84,6 +84,7 @@ You can shoot on the ground, while jumping or falling, and while hovering. Like 
 - **Overheat:** fly without stopping for about 11 seconds. The heat bar turns red, you drop, and you can't fly again until the bar is empty.
 - **Cool down mid-flight:** dive steeply toward the ground, skim low over the blue lake, or fly through the waterfall (the lake and waterfall are about 200 m from the start; look for the tall cliff). The bar shows **COOLING**.
 - **Shooting range:** right in front of the start, beside the landing tower, there are training dummies, dummies that strafe, and floating drones. Shoot the glowing orange head or eye for double damage (orange damage numbers). Destroyed targets come back after a few seconds.
+- **Camera:** like Anthem, the camera sits over your right shoulder, so your suit stands a little left of center and the crosshair has a clear view. The crosshair turns **red** when it's over an enemy. In flight the camera swings in behind you and pulls far back.
 - **Aim down sights:** hold the right mouse button to zoom over the shoulder and tighten your spread. Long bursts bloom the crosshair; let go briefly to recover accuracy.
 - **Hover and shoot:** jump, press **Space** to hover, and shoot the drones in the air.
 - **Ammo:** a magazine holds 30 rounds and reloads automatically when empty (or press **R**). When your reserve runs out, walk up to the green crate with the yellow stripe to refill.
@@ -99,7 +100,7 @@ Every value is exposed in the editor. While playing, press **F8** to detach from
 
 - **Character Movement → Javelin | Flight / Hover / Ground** for speeds, turn rate, dive and crash settings.
 - **Heat** for heat gain and cooling rates.
-- **Camera** for the camera profile used on foot, sprinting, hovering, flying and aiming.
+- **Camera** for the camera profile used on foot, sprinting, hovering, flying and aiming. Socket Offset Y moves the camera sideways (bigger = suit further left), Arm Length is the distance behind you.
 - **Weapon** for damage, fire rate, magazine size, reload time, spread and recoil.
 - **Suit Health** for shields, armor and how fast shields recharge.
 - To tune enemies, select one of them (they're listed as **EnemySoldier** and **EnemyDrone** in the Outliner while playing) and look under **Enemy**: health, speed, sight range, damage, fire rate, aim. The **EnemyEncounter** actor has the wave sizes.
