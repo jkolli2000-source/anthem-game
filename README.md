@@ -67,7 +67,8 @@ You don't need to place anything. When you press Play, the game spawns your jave
 | Jump (on ground) | Space | A |
 | Hover (in the air), stop hovering | Space | A |
 | Switch from flying to hovering | Space | A |
-| Sprint (hold, on ground) | Left Shift | Click left stick |
+| Sprint (on ground) | Hold Left Shift | Click left stick (stays on until you let go of the stick or click again) |
+| Dodge (on ground or hovering) | Left Ctrl or C | B |
 | Start flying (in the air), stop flying | Left Shift | Click left stick |
 | Take off straight into flight | F | Y |
 | Flight: speed up / slow down | W / S | Left stick up / down |
@@ -121,8 +122,10 @@ The world is about **4 km across** and is built entirely from code when you pres
 Everything still plays fast and arcade-y like Anthem, but now has weight behind it:
 
 - **Flight momentum:** the suit turns toward where you look, but the faster you go the wider it turns. Yank the camera hard at full boost and you'll see the suit slide outward before it grips the air. Diving builds speed and that speed carries into the pull-up, so dive, then swoop back up. Climbing straight up slowly bleeds speed. Starting flight from a jump or fall keeps the momentum you had.
-- **Heavy on foot:** the suit takes a moment to get up to speed and to stop, turns with some weight, and leans into speeding up, braking and turning. It jumps about as high as before but falls faster.
-- **Footsteps:** every step bobs the camera a little. Sprinting stomps: dust kicks up at each foot and the gamepad thumps.
+- **Heavy on foot:** the first step answers right away, then the suit winds up to full speed over a moment. The faster it goes the wider and slower it turns, and pushing the opposite way plants the feet and brakes before it heads back. It leans into speeding up, braking and turning, and stops with a short skid. It jumps about as high as before but falls faster.
+- **Walking like a mech:** each foot plants on the ground and stays put while the body moves over it, then lifts and swings to where it lands next, so the feet don't slide. Steps are slow and heavy (about 3 a second walking, quicker sprinting). The hips sway over the foot carrying the weight and twist with the stride, the shoulders twist back, the arms swing against the legs, and the head stays steady. Feet follow slopes. Strafing and walking backward step the right way, turning on the spot shuffles the feet around, and after you stop the suit takes a settling step to bring its feet together.
+- **Footsteps:** every step stomps: the body drops onto the foot, the camera thumps and the gamepad knocks. Sprinting stomps harder and kicks up dust.
+- **Dodge:** **Left Ctrl** or **C** (gamepad **B**) fires the jets for a quick dash about 5 m the way you're pushing, or backward if you aren't. The suit keeps facing the same way, so you can sidestep while aiming. Its feet skid along the ground trailing dust, and it digs in at the end. Works while hovering too. Ready again about 0.75 s after the last one.
 - **Landings:** the legs crouch to absorb the landing and the camera dips. Drop from high up, or fly straight into the ground, and you get a dust ring, a big shake, and a short moment where the suit is slowed while it gets its footing. Land out of fast flight and you skid along the ground.
 - **Taking off** from the ground blasts a ring of dust. **Hovering** low blows dust off the ground under your jets, and flying fast and low leaves a dust wake.
 - **Recoil:** holding the trigger the gun climbs harder and drifts a little to the right. Let go and the view settles most of the way back down by itself. Short bursts stay accurate. Each shot kicks your arms and the camera.
@@ -137,7 +140,8 @@ Everything still plays fast and arcade-y like Anthem, but now has weight behind 
 
 Every value is exposed in the editor. While playing, press **F8** to detach from the javelin, click it in the world (or select **JavelinCharacter** in the Outliner), and look in the **Details** panel:
 
-- **Character Movement → Javelin | Flight / Hover / Ground / Landing** for speeds, thrust, drag, gravity in dives, turn rate at low and high speed, **Flight Grip** (lower = more drift in turns), dive and crash settings, and hard landing slowdown and skid. Stock settings like **Max Acceleration**, **Braking Deceleration Walking** and **Rotation Rate** set how heavy the suit feels on foot.
+- **Character Movement → Javelin | Flight / Hover / Ground / Landing / Dodge** for speeds, thrust, drag, gravity in dives, turn rate at low and high speed, **Flight Grip** (lower = more drift in turns), dive and crash settings, and hard landing slowdown and skid. **Ground** has the on-foot weight: start and top-speed acceleration, turn grip, reverse braking and turn rates. **Dodge** has the dash speed, length and cooldown. Stock **Max Walk Speed** and **Braking Deceleration Walking** set walk speed and how quickly you stop.
+- **Visuals → Walking** for the step animation: steps per second walking and sprinting, how far and high each foot steps, how low the suit crouches, how much each step drops the body, hip sway, twist and tilt, arm swing and dodge lean.
 - **Feel** for camera shake (**Camera Shake Scale** 0 turns it off), flight buffeting, landing thresholds, dust color, how far hits shove you, and gamepad rumble on/off and strength.
 - **Input → Gamepad** for right stick aiming: turn speed on foot and while aiming, how curved the response is (higher = slower small nudges), and how much and how quickly turning speeds up when you hold the stick to the side.
 - **Heat** for heat gain and cooling rates.
@@ -155,8 +159,8 @@ Changes made while playing are lost when you stop. To keep a value, change its d
 
 | File | What it does |
 |---|---|
-| `JavelinCharacter` | The player suit: camera, input bindings, mech suit body and gun, poses, flight tilt and banking, plus the feel: camera shake, landing crouch, footsteps, flinching, dust and rumble. |
-| `JavelinMovementComponent` | Movement: walk, sprint, jump, plus custom **Flight** (with momentum and drift) and **Hover** modes, hard landings and skids. |
+| `JavelinCharacter` | The player suit: camera, input bindings, mech suit body and gun, poses, the planted-foot walking gait (leg IK), flight tilt and banking, plus the feel: camera shake, landing crouch, footsteps, dodge effects, flinching, dust and rumble. |
+| `JavelinMovementComponent` | Movement: walk, sprint, jump, dodge, plus custom **Flight** (with momentum and drift) and **Hover** modes, hard landings and skids. |
 | `JavelinHeatComponent` | Heat meter: gain while flying or hovering, cooling, overheat lockout. |
 | `CoolingVolume` | A box that cools the suit (water, waterfalls). Drag `CoolingVolume` into any level. |
 | `JungleWorld` | The rainforest: terrain, rivers, lakes, waterfalls, caves, ruins, trees and plants, fog and light, water cooling, and the ruin camps. |
