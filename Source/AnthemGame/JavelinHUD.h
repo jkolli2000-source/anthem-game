@@ -4,7 +4,10 @@
 #include "GameFramework/HUD.h"
 #include "JavelinHUD.generated.h"
 
-/** Crosshair, heat bar, movement state and a controls reminder, drawn without any UI assets. */
+/**
+ * Crosshair, hit markers, damage numbers, target health bars, ammo, heat bar,
+ * movement state and a controls reminder, drawn without any UI assets.
+ */
 UCLASS()
 class ANTHEMGAME_API AJavelinHUD : public AHUD
 {
@@ -18,4 +21,10 @@ public:
 
 private:
 	void DrawCenteredText(const FString& Text, const FLinearColor& Color, float CenterX, float Y, float Scale = 1.f);
+	void DrawCrosshair(const class AJavelinCharacter* Javelin, float CenterX, float CenterY);
+	void DrawWeaponInfo(const class UJavelinWeaponComponent* Weapon);
+	void DrawWorldMarkers(const class UJavelinWeaponComponent* Weapon);
+
+	/** Screen position of a world point, or false if it's behind the camera. */
+	bool ProjectToScreen(const FVector& WorldLocation, FVector2D& OutScreen) const;
 };

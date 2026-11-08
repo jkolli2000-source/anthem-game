@@ -1,5 +1,7 @@
 #include "FlightTestArena.h"
+#include "AmmoCrate.h"
 #include "CoolingVolume.h"
+#include "ShootingTarget.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -15,6 +17,10 @@ namespace
 	const float CliffX = 260.f;
 	const FVector CliffSize(20.f, 60.f, 90.f);
 	const float WaterfallWidth = 20.f;
+
+	// Shooting range in front of the start, beside the landing tower. Meters from the arena center.
+	const FVector2D RangeMin(15.f, -45.f);
+	const FVector2D RangeMax(100.f, 25.f);
 }
 
 AFlightTestArena::AFlightTestArena()
@@ -112,7 +118,12 @@ void AFlightTestArena::OnConstruction(const FTransform& Transform)
 		AddBox(Rocks, Center + FVector(0.f, 0.f, 42.5f * Meter), FVector(5.f, 35.f, 5.f) * Meter, Angle);
 	}
 
-	// Rock pillars scattered around, kept clear of the start area and the lake.
+	// Low cover walls at the front of the shooting range.
+	AddBox(Rocks, FVector(22.f, -20.f, 0.75f) * Meter, FVector(0.8f, 5.f, 1.5f) * Meter);
+	AddBox(Rocks, FVector(22.f, 2.f, 0.75f) * Meter, FVector(0.8f, 5.f, 1.5f) * Meter);
+	AddBox(Rocks, FVector(55.f, -30.f, 1.f) * Meter, FVector(4.f, 4.f, 2.f) * Meter, 30.f);
+
+	// Rock pillars scattered around, kept clear of the start area, the lake and the shooting range.
 	FRandomStream Random(RandomSeed);
 	int32 Placed = 0;
 	for (int32 Attempt = 0; Placed < PillarCount && Attempt < PillarCount * 20; ++Attempt)
@@ -121,7 +132,8 @@ void AFlightTestArena::OnConstruction(const FTransform& Transform)
 		const bool bNearStart = Position.Size() < 70.f;
 		const bool bNearLake = Position.X > LakeCenter.X - LakeSize.X * 0.5f - 15.f && Position.X < CliffX + 20.f && FMath::Abs(Position.Y) < 50.f;
 		const bool bNearArches = FMath::Abs(Position.Size() - 140.f) < 25.f;
-		if (bNearStart || bNearLake || bNearArches)
+		const bool bNearRange = Position.X > RangeMin.X - 15.f && Position.X < RangeMax.X + 15.f && Position.Y > RangeMin.Y - 15.f && Position.Y < RangeMax.Y + 15.f;
+		if (bNearStart || bNearLake || bNearArches || bNearRange)
 		{
 			continue;
 		}
@@ -132,4 +144,60 @@ void AFlightTestArena::OnConstruction(const FTransform& Transform)
 			Random.FRandRange(0.f, 90.f));
 		++Placed;
 	}
+}
+
+void AFlightTestArena::BeginPlay()
+{
+	Super::BeginPlay();
+	if (bSpawnShootingRange)
+	{
+		SpawnShootingRange();
+	}
+}
+
+void AFlightTestArena::SpawnShootingRange()
+{
+	UWorld* World = GetWorld();
+	const FTransform& ArenaTransform = GetActorTransform();
+
+	struct FTargetSpot
+	{
+		EShootingTargetStyle Style;
+		FVector Location;	// meters
+		float Strafe;		// meters to each side
+		float Bob;			// meters
+	};
+	const FTargetSpot Spots[] = {
+		// A row of standing dummies to warm up on.
+		{ EShootingTargetStyle::Dummy, FVector(32.f, -28.f, 0.f), 0.f, 0.f },
+		{ EShootingTargetStyle::Dummy, FVector(36.f, -14.f, 0.f), 0.f, 0.f },
+		{ EShootingTargetStyle::Dummy, FVector(40.f, 0.f, 0.f), 0.f, 0.f },
+		{ EShootingTargetStyle::Dummy, FVector(44.f, 14.f, 0.f), 0.f, 0.f },
+		// Dummies that strafe, further out.
+		{ EShootingTargetStyle::Dummy, FVector(65.f, -18.f, 0.f), 8.f, 0.f },
+		{ EShootingTargetStyle::Dummy, FVector(78.f, 6.f, 0.f), 10.f, 0.f },
+		// Drones up high. Hover (Space in the air) to shoot them.
+		{ EShootingTargetStyle::Drone, FVector(60.f, -38.f, 15.f), 0.f, 2.f },
+		{ EShootingTargetStyle::Drone, FVector(85.f, -12.f, 25.f), 6.f, 3.f },
+		{ EShootingTargetStyle::Drone, FVector(92.f, 18.f, 35.f), 0.f, 4.f },
+	};
+
+	for (const FTargetSpot& Spot : Spots)
+	{
+		// Deferred so the style is set before the target builds its shape.
+		const FTransform SpotTransform = FTransform(FRotator(0.f, 180.f, 0.f), Spot.Location * Meter) * ArenaTransform;
+		AShootingTarget* Target = World->SpawnActorDeferred<AShootingTarget>(AShootingTarget::StaticClass(), SpotTransform, this);
+		if (!Target)
+		{
+			continue;
+		}
+		Target->Style = Spot.Style;
+		Target->MaxHealth = Spot.Style == EShootingTargetStyle::Drone ? 180.f : 300.f;
+		Target->StrafeDistance = Spot.Strafe * Meter;
+		Target->BobHeight = Spot.Bob * Meter;
+		Target->FinishSpawning(SpotTransform);
+	}
+
+	const FTransform CrateTransform = FTransform(FRotator(0.f, 20.f, 0.f), FVector(14.f, -9.f, 0.f) * Meter) * ArenaTransform;
+	World->SpawnActor<AAmmoCrate>(AAmmoCrate::StaticClass(), CrateTransform);
 }
