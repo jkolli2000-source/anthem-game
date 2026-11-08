@@ -11,20 +11,20 @@
 namespace
 {
 	const FName WeakSpotTag(TEXT("WeakSpot"));
+}
 
-	/** Whether a hit actor counts as a living target, so a hit that drops it to zero shows as a kill. */
-	bool IsLivingTarget(const AActor* Actor)
+bool UJavelinWeaponComponent::IsLivingTarget(const AActor* Actor)
+{
+	// Also how a hit that drops something to zero shows as a kill.
+	if (const AShootingTarget* Target = Cast<AShootingTarget>(Actor))
 	{
-		if (const AShootingTarget* Target = Cast<AShootingTarget>(Actor))
-		{
-			return Target->IsAlive();
-		}
-		if (const AJavelinEnemy* Enemy = Cast<AJavelinEnemy>(Actor))
-		{
-			return Enemy->IsAlive();
-		}
-		return false;
+		return Target->IsAlive();
 	}
+	if (const AJavelinEnemy* Enemy = Cast<AJavelinEnemy>(Actor))
+	{
+		return Enemy->IsAlive();
+	}
+	return false;
 }
 
 UJavelinWeaponComponent::UJavelinWeaponComponent()
@@ -144,15 +144,7 @@ void UJavelinWeaponComponent::FireShot()
 		const float Dealt = UGameplayStatics::ApplyPointDamage(HitActor, ShotDamage, ShotDirection, MuzzleHit, Controller, Pawn, UDamageType::StaticClass());
 		if (Dealt > 0.f)
 		{
-			LastHitTime = LastShotTime;
-			bLastHitWeakSpot = bWeakSpot;
-			bLastHitKill = bWasAlive && !IsLivingTarget(HitActor);
-
-			FJavelinDamageNumber& Number = DamageNumbers.AddDefaulted_GetRef();
-			Number.Location = MuzzleHit.ImpactPoint;
-			Number.Amount = Dealt;
-			Number.bWeakSpot = bWeakSpot;
-			Number.SpawnTime = LastShotTime;
+			AddHitFeedback(MuzzleHit.ImpactPoint, Dealt, bWeakSpot, bWasAlive && !IsLivingTarget(HitActor));
 		}
 	}
 
@@ -199,6 +191,39 @@ bool UJavelinWeaponComponent::IsCrosshairOnTarget() const
 	bool bHit = false;
 	TraceFromView(ViewLocation, ViewRotation.Vector(), Hit, bHit);
 	return bHit && IsLivingTarget(Hit.GetActor());
+}
+
+FVector UJavelinWeaponComponent::GetAimPoint() const
+{
+	const APawn* Pawn = Cast<APawn>(GetOwner());
+	const AController* Controller = Pawn ? Pawn->GetController() : nullptr;
+	if (!Controller)
+	{
+		return GetOwner()->GetActorLocation() + GetOwner()->GetActorForwardVector() * Range;
+	}
+
+	FVector ViewLocation;
+	FRotator ViewRotation;
+	Controller->GetPlayerViewPoint(ViewLocation, ViewRotation);
+	FHitResult Hit;
+	bool bHit = false;
+	return TraceFromView(ViewLocation, ViewRotation.Vector(), Hit, bHit);
+}
+
+void UJavelinWeaponComponent::AddHitFeedback(const FVector& Location, float Amount, bool bWeakSpot, bool bKill)
+{
+	// A blast can hit several enemies at once; a kill among them should still show as a kill.
+	const float Now = GetWorld()->GetTimeSeconds();
+	const bool bSameMoment = LastHitTime == Now;
+	bLastHitWeakSpot = bWeakSpot || (bSameMoment && bLastHitWeakSpot);
+	bLastHitKill = bKill || (bSameMoment && bLastHitKill);
+	LastHitTime = Now;
+
+	FJavelinDamageNumber& Number = DamageNumbers.AddDefaulted_GetRef();
+	Number.Location = Location;
+	Number.Amount = Amount;
+	Number.bWeakSpot = bWeakSpot;
+	Number.SpawnTime = LastHitTime;
 }
 
 bool UJavelinWeaponComponent::StartReload()
