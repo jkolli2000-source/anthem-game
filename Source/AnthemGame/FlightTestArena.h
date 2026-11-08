@@ -37,6 +37,13 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Arena", meta = (ClampMin = "0", ClampMax = "200"))
 	int32 PillarCount = 45;
 
+	/**
+	 * Builds the flight course: the ground, tower, lake, waterfall, arches and pillars. The jungle
+	 * turns this off and keeps just the shooting range and enemy camp.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Arena")
+	bool bBuildFlightCourse = true;
+
 	/** Spawns the targets and ammo crate when play starts. */
 	UPROPERTY(EditAnywhere, Category = "Arena")
 	bool bSpawnShootingRange = true;
@@ -77,6 +84,7 @@ protected:
 	TObjectPtr<UMaterialInterface> BaseMaterial;
 
 private:
+	void BuildFlightCourse();
 	void SpawnShootingRange();
 	void SpawnEnemyCamp();
 	void SetColor(UInstancedStaticMeshComponent* Component, const FLinearColor& Color);

@@ -93,6 +93,42 @@ void AFlightTestArena::OnConstruction(const FTransform& Transform)
 	SetColor(Rocks, RockColor);
 	SetColor(Water, WaterColor);
 
+	// Without the course there's no water, so the cooling zones are switched off too.
+	const ECollisionEnabled::Type CoolingCollision = bBuildFlightCourse ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision;
+	LakeCooling->SetCollisionEnabled(CoolingCollision);
+	WaterfallCooling->SetCollisionEnabled(CoolingCollision);
+	if (bBuildFlightCourse)
+	{
+		BuildFlightCourse();
+	}
+
+	// Low cover walls at the front of the shooting range.
+	AddBox(Rocks, FVector(22.f, -20.f, 0.75f) * Meter, FVector(0.8f, 5.f, 1.5f) * Meter);
+	AddBox(Rocks, FVector(22.f, 2.f, 0.75f) * Meter, FVector(0.8f, 5.f, 1.5f) * Meter);
+	AddBox(Rocks, FVector(55.f, -30.f, 1.f) * Meter, FVector(4.f, 4.f, 2.f) * Meter, 30.f);
+
+	// Enemy camp: a ring of broken walls and crates to fight around, with a watchtower in the middle.
+	{
+		const FVector Camp(CampCenter.X, CampCenter.Y, 0.f);
+		for (int32 Index = 0; Index < 6; ++Index)
+		{
+			// Wall segments on a ring, with gaps between them to walk through.
+			const float Angle = Index * 60.f + 15.f;
+			const FVector Spot = Camp + FRotator(0.f, Angle, 0.f).Vector() * CampRadius * 0.85f;
+			const float Height = Index % 2 == 0 ? 2.5f : 1.5f;
+			AddBox(Rocks, FVector(Spot.X, Spot.Y, Height * 0.5f) * Meter, FVector(1.2f, 9.f, Height) * Meter, Angle);
+		}
+		const FVector Crates[] = { FVector(8.f, 6.f, 1.5f), FVector(-10.f, 4.f, 1.f), FVector(3.f, -11.f, 2.f), FVector(-6.f, -8.f, 1.2f), FVector(14.f, -4.f, 1.f) };
+		for (const FVector& Crate : Crates)
+		{
+			AddBox(Rocks, FVector(Camp.X + Crate.X, Camp.Y + Crate.Y, Crate.Z * 0.5f) * Meter, FVector(Crate.Z * 1.6f, Crate.Z * 1.6f, Crate.Z) * Meter, Crate.X * 7.f);
+		}
+		AddBox(Rocks, FVector(Camp.X, Camp.Y, 6.f) * Meter, FVector(4.f, 4.f, 12.f) * Meter, 45.f);
+	}
+}
+
+void AFlightTestArena::BuildFlightCourse()
+{
 	// 1 km square ground. Its top sits just under zero so it doesn't flicker against a template level's floor.
 	AddBox(Ground, FVector(0.f, 0.f, -52.f), FVector(1000.f, 1000.f, 1.f) * Meter);
 
@@ -121,30 +157,6 @@ void AFlightTestArena::OnConstruction(const FTransform& Transform)
 		AddBox(Rocks, Center + Side + FVector(0.f, 0.f, 20.f * Meter), PostSize, Angle);
 		AddBox(Rocks, Center - Side + FVector(0.f, 0.f, 20.f * Meter), PostSize, Angle);
 		AddBox(Rocks, Center + FVector(0.f, 0.f, 42.5f * Meter), FVector(5.f, 35.f, 5.f) * Meter, Angle);
-	}
-
-	// Low cover walls at the front of the shooting range.
-	AddBox(Rocks, FVector(22.f, -20.f, 0.75f) * Meter, FVector(0.8f, 5.f, 1.5f) * Meter);
-	AddBox(Rocks, FVector(22.f, 2.f, 0.75f) * Meter, FVector(0.8f, 5.f, 1.5f) * Meter);
-	AddBox(Rocks, FVector(55.f, -30.f, 1.f) * Meter, FVector(4.f, 4.f, 2.f) * Meter, 30.f);
-
-	// Enemy camp: a ring of broken walls and crates to fight around, with a watchtower in the middle.
-	{
-		const FVector Camp(CampCenter.X, CampCenter.Y, 0.f);
-		for (int32 Index = 0; Index < 6; ++Index)
-		{
-			// Wall segments on a ring, with gaps between them to walk through.
-			const float Angle = Index * 60.f + 15.f;
-			const FVector Spot = Camp + FRotator(0.f, Angle, 0.f).Vector() * CampRadius * 0.85f;
-			const float Height = Index % 2 == 0 ? 2.5f : 1.5f;
-			AddBox(Rocks, FVector(Spot.X, Spot.Y, Height * 0.5f) * Meter, FVector(1.2f, 9.f, Height) * Meter, Angle);
-		}
-		const FVector Crates[] = { FVector(8.f, 6.f, 1.5f), FVector(-10.f, 4.f, 1.f), FVector(3.f, -11.f, 2.f), FVector(-6.f, -8.f, 1.2f), FVector(14.f, -4.f, 1.f) };
-		for (const FVector& Crate : Crates)
-		{
-			AddBox(Rocks, FVector(Camp.X + Crate.X, Camp.Y + Crate.Y, Crate.Z * 0.5f) * Meter, FVector(Crate.Z * 1.6f, Crate.Z * 1.6f, Crate.Z) * Meter, Crate.X * 7.f);
-		}
-		AddBox(Rocks, FVector(Camp.X, Camp.Y, 6.f) * Meter, FVector(4.f, 4.f, 12.f) * Meter, 45.f);
 	}
 
 	// Rock pillars scattered around, kept clear of the start area, the lake, the shooting range and the enemy camp.

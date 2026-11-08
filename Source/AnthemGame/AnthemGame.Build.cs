@@ -13,7 +13,8 @@ public class AnthemGame : ModuleRules
 			"Engine",
 			"InputCore",
 			"EnhancedInput",
-			"GameplayTags"
+			"GameplayTags",
+			"ProceduralMeshComponent"
 		});
 	}
 }
