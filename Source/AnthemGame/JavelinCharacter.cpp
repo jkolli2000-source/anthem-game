@@ -411,7 +411,8 @@ void AJavelinCharacter::CreateDefaultInput()
 	Map(MoveAction, EKeys::Gamepad_Left2D, false, false, false, true);
 
 	Map(LookAction, EKeys::Mouse2D, false, false, true);
-	Map(LookStickAction, EKeys::Gamepad_Right2D, false, false, true, true);
+	// Not negated: LookStick turns the camera itself, with stick up looking up.
+	Map(LookStickAction, EKeys::Gamepad_Right2D, false, false, false, true);
 
 	Map(JumpAction, EKeys::SpaceBar);
 	Map(JumpAction, EKeys::Gamepad_FaceButton_Bottom);
@@ -457,6 +458,7 @@ void AJavelinCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	if (LookStickAction)
 	{
 		Input->BindAction(LookStickAction, ETriggerEvent::Triggered, this, &AJavelinCharacter::LookStick);
+		Input->BindAction(LookStickAction, ETriggerEvent::Completed, this, &AJavelinCharacter::LookStickCompleted);
 	}
 	if (JumpAction)
 	{
@@ -531,9 +533,57 @@ void AJavelinCharacter::Look(const FInputActionValue& Value)
 
 void AJavelinCharacter::LookStick(const FInputActionValue& Value)
 {
-	const FVector2D Axis = Value.Get<FVector2D>() * StickLookRate * GetWorld()->GetDeltaSeconds() * (Weapon->IsAiming() ? AimLookScale : 1.f);
-	AddControllerYawInput(Axis.X);
-	AddControllerPitchInput(Axis.Y);
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
+	{
+		return;
+	}
+	const float DeltaSeconds = GetWorld()->GetDeltaSeconds();
+	const bool bAiming = Weapon->IsAiming();
+
+	// The dead zone modifier already rescales the stick to 0..1 past the dead zone.
+	// Curve the magnitude (not each axis) so small nudges are slow and precise and diagonals stay smooth.
+	const FVector2D Raw = Value.Get<FVector2D>();
+	const float Magnitude = FMath::Min(Raw.Size(), 1.f);
+	if (Magnitude <= KINDA_SMALL_NUMBER)
+	{
+		StickHoldTime = 0.f;
+		return;
+	}
+	const FVector2D Stick = Raw / Raw.Size() * FMath::Pow(Magnitude, StickResponseExponent);
+
+	// Like Anthem on console: holding the stick pushed sideways speeds up turning after a short delay.
+	if (FMath::Abs(Raw.X) >= StickRampThreshold)
+	{
+		StickHoldTime += DeltaSeconds;
+	}
+	else
+	{
+		StickHoldTime = 0.f;
+	}
+	const float Ramp = StickRampTime > 0.f
+		? FMath::Clamp((StickHoldTime - StickRampDelay) / StickRampTime, 0.f, 1.f)
+		: (StickHoldTime >= StickRampDelay ? 1.f : 0.f);
+	const float RampEased = Ramp * Ramp * (3.f - 2.f * Ramp);
+
+	FVector2D Rate = bAiming ? StickAimLookRate : StickLookRate;
+	Rate.X += (bAiming ? StickAimRampYawBonus : StickRampYawBonus) * RampEased;
+	if (bAiming && Weapon->IsCrosshairOnTarget())
+	{
+		Rate *= StickAimFriction;
+	}
+
+	// Rotate the controller directly instead of AddControllerYawInput, which UE5's legacy input
+	// scales multiply by 2.5 and made the stick far too fast. The camera manager still clamps pitch.
+	FRotator Rotation = PC->GetControlRotation();
+	Rotation.Yaw += Stick.X * Rate.X * DeltaSeconds;
+	Rotation.Pitch += Stick.Y * Rate.Y * DeltaSeconds;
+	PC->SetControlRotation(Rotation);
+}
+
+void AJavelinCharacter::LookStickCompleted()
+{
+	StickHoldTime = 0.f;
 }
 
 bool AJavelinCharacter::TryStartFlight()
