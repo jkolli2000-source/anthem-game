@@ -35,6 +35,22 @@ struct FJavelinCameraProfile
 	float LagSpeed = 15.f;
 };
 
+/** Joint angles for the suit, in degrees. Index 0 is the left side, 1 the right. */
+struct FJavelinSuitPose
+{
+	float TorsoPitch = 0.f;
+	float HeadPitch = 0.f;
+	float ShoulderPitch[2] = {};
+	float ShoulderSpread = 0.f;
+	float ElbowBend[2] = {};
+	float HipPitch[2] = {};
+	float LegSpread = 0.f;
+	float KneeBend[2] = {};
+	float BodyBob = 0.f;
+	float BackFlame = 0.f;
+	float FootFlame = 0.f;
+};
+
 /**
  * The player's javelin (Ranger for now).
  *
@@ -80,24 +96,64 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<UJavelinHeatComponent> Heat;
 
-	/** Placeholder suit made of basic shapes. Tilted for flight pitch and banking. */
+	/** Root of the mech suit, built from basic shapes. Tilted for flight pitch and banking. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> VisualRoot;
 
-	UPROPERTY(VisibleAnywhere, Category = "Components")
-	TObjectPtr<UStaticMeshComponent> TorsoMesh;
+	// Joints of the suit. Each one is a pivot that the procedural animation rotates.
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> TorsoPivot;
 
-	UPROPERTY(VisibleAnywhere, Category = "Components")
-	TObjectPtr<UStaticMeshComponent> LegsMesh;
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> HeadPivot;
 
-	UPROPERTY(VisibleAnywhere, Category = "Components")
-	TObjectPtr<UStaticMeshComponent> HeadMesh;
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> LeftShoulder;
 
-	UPROPERTY(VisibleAnywhere, Category = "Components")
-	TObjectPtr<UStaticMeshComponent> VisorMesh;
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> RightShoulder;
 
-	UPROPERTY(VisibleAnywhere, Category = "Components")
-	TObjectPtr<UStaticMeshComponent> ThrusterMesh;
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> LeftElbow;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> RightElbow;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> LeftHip;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> RightHip;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> LeftKnee;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> RightKnee;
+
+	/** Jet flames on the back pack. Scaled along their length by thrust. */
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TArray<TObjectPtr<USceneComponent>> BackFlames;
+
+	/** Jet flames under the feet, used mostly for hovering. */
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TArray<TObjectPtr<USceneComponent>> FootFlames;
+
+	UPROPERTY(EditAnywhere, Category = "Visuals|Paint")
+	FLinearColor PrimaryColor = FLinearColor(0.16f, 0.22f, 0.32f);
+
+	UPROPERTY(EditAnywhere, Category = "Visuals|Paint")
+	FLinearColor SecondaryColor = FLinearColor(0.42f, 0.44f, 0.48f);
+
+	UPROPERTY(EditAnywhere, Category = "Visuals|Paint")
+	FLinearColor TrimColor = FLinearColor(0.85f, 0.55f, 0.12f);
+
+	UPROPERTY(EditAnywhere, Category = "Visuals|Paint")
+	FLinearColor FrameColor = FLinearColor(0.05f, 0.05f, 0.06f);
+
+	/** Visor and chest core. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Paint")
+	FLinearColor AccentColor = FLinearColor(0.1f, 0.8f, 1.f);
 
 	/** Leave empty to use the built-in key bindings. Set these to use your own input assets instead. */
 	UPROPERTY(EditAnywhere, Category = "Input")
@@ -155,8 +211,21 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Visuals")
 	float VisualTiltSpeed = 8.f;
 
+	/** Distance covered by one full walk cycle (two steps). */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Animation", meta = (Units = "cm"))
+	float WalkStrideLength = 170.f;
+
+	/** How quickly limbs blend between poses. */
+	UPROPERTY(EditAnywhere, Category = "Visuals|Animation")
+	float PoseBlendSpeed = 10.f;
+
 private:
-	UStaticMeshComponent* CreateVisualPart(FName Name, UStaticMesh* PartMesh, const FVector& Location, const FVector& Scale);
+	USceneComponent* CreatePivot(FName Name, USceneComponent* Parent, const FVector& Location);
+	UStaticMeshComponent* CreatePart(FName Name, USceneComponent* Parent, UStaticMesh* PartMesh, const FVector& Location, const FVector& Scale, FName Paint, const FRotator& Rotation = FRotator::ZeroRotator);
+	USceneComponent* CreateFlame(FName Name, USceneComponent* Parent, UStaticMesh* ConeMesh, const FVector& Location, float Width);
+	void BuildSuit();
+	FJavelinSuitPose ComputeTargetPose(float DeltaSeconds);
+	void ApplyPose(const FJavelinSuitPose& Pose);
 	void CreateDefaultInput();
 
 	void Move(const FInputActionValue& Value);
@@ -175,8 +244,13 @@ private:
 	void UpdateCamera(float DeltaSeconds);
 	void UpdateVisuals(float DeltaSeconds);
 
+	/** Shared by every thruster glow and flame, so they all change color together. */
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> ThrusterMaterial;
+
+	FJavelinSuitPose CurrentPose;
+	float WalkPhase = 0.f;
+	float AnimTime = 0.f;
 
 	float VisualPitch = 0.f;
 	float VisualRoll = 0.f;
