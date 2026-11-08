@@ -2,7 +2,7 @@
 
 A flying exosuit ("javelin") action game inspired by Anthem, built in **Unreal Engine 5** with C++.
 
-**Current milestone: 1, flight feel.** You can walk, sprint, jump, hover and fly a placeholder Ranger suit around a huge **rainforest jungle**: rolling hills, cliffs, two rivers, lakes, waterfalls, rock tunnels, ruins, giant canopy trees and thousands of plants, all built from code. Flying builds **heat**; overheat and you drop out of the sky until the suit cools. Rivers, lakes, waterfalls and steep dives cool you down. You also carry an **assault rifle** with aiming, ammo, reloads and hit effects, and there's a shooting range next to the start. Your suit has **shields and armor**, and an **enemy camp** sends waves of ground soldiers and flying drones that chase you and shoot back. For bigger hits you have two pieces of Anthem-style **gear**, a frag grenade and a homing missile launcher, each on its own cooldown. Flight has real **momentum**, combat has **weight** (recoil, flinching, stagger, enemies that topple and fall out of the sky), and the suit feels **heavy** (footsteps, landing impacts, dust, camera shake and gamepad rumble).
+**Current milestone: 1, flight feel.** You can walk, sprint, jump, hover and fly a placeholder Ranger suit around a huge **rainforest jungle**: rolling hills, cliffs, two rivers, lakes, waterfalls, rock tunnels, ruins, giant canopy trees and thousands of plants, all built from code, under a dark, stormy sky with rain, lightning and a day and night cycle. Flying builds **heat**; overheat and you drop out of the sky until the suit cools. Rivers, lakes, waterfalls and steep dives cool you down. You also carry an **assault rifle** with aiming, ammo, reloads and hit effects, and there's a shooting range next to the start. Your suit has **shields and armor**, and an **enemy camp** sends waves of ground soldiers and flying drones that chase you and shoot back. For bigger hits you have two pieces of Anthem-style **gear**, a frag grenade and a homing missile launcher, each on its own cooldown. Flight has real **momentum**, combat has **weight** (recoil, flinching, stagger, enemies that topple and fall out of the sky), and the suit feels **heavy** (footsteps, landing impacts, dust, camera shake and gamepad rumble).
 
 The full design is in the project's UE5 implementation plan. Characters are placeholder shapes for now; art comes later.
 
@@ -91,7 +91,38 @@ The world is about **4 km across** and is built entirely from code when you pres
 - **Ruins:** four ruined temples out in the jungle, each with its own enemy camp. The red **ENEMY CAMP** markers show where they are and how far. Camps farther from the start send bigger waves.
 - **Rock tunnels:** two caves you can fly or walk through. The first is just behind the start camp, about 340 m south.
 - **Mountains** ring the edge of the world, and stone spires stick up out of the forest.
-- **Fog and light:** when play starts the level's fog becomes a thick, low jungle haze with light shafts, and the sun turns warm and golden. Fly higher to see farther.
+- **Storm and day/night:** the jungle is a dark, stormy rainforest. Heavy rain falls around you, lightning flashes light up the fog, and the storm builds and eases on its own but never fully clears. The sun moves across the sky and sets, then a pale blue moon lights the jungle until morning. A whole day and night takes about 30 minutes (nights go twice as fast). You start in the late afternoon. Rain stops inside caves and under rock overhangs. See **Weather** below.
+- **Light and shadows:** soft sun shadows that get softer as the storm thickens, small contact shadows under plants and rocks, bounce light from Lumen, 3D volumetric clouds, and a gentle color grade (grayer and colder in the storm, darker at night).
+- **Ground and rocks:** plain colors until you add free **Megascans** art from Fab; then the ground, mud, cliffs, boulders and stone spires use it automatically. See **Making it look real (Megascans)** below.
+
+### Weather
+
+Console commands for trying it out while you play. Press the **`** key (under **Esc**) to open the console, type one, and press **Enter**:
+
+- `JungleTime 21` jumps to 9 pm (night). Any hour from 0 to 24 works: 6 is sunrise, 12 noon, 18 sunset.
+- `JungleTimeSpeed 30` runs a whole day in about a minute. `JungleTimeSpeed 1` puts it back to normal.
+- `JungleStorm 1` holds the storm at a full downpour, `JungleStorm 0.3` at just overcast, and `JungleStorm -1` lets it drift on its own again.
+
+To change the defaults, drag a **JungleWeather** from the **Place Actors** panel into the level. Its **Details** panel under **Weather** has the start time, day length, night speed, storm strength range, number of raindrops, wind, lightning, sun and moon brightness, how dark nights get, and storm fog. If nights are too dark to play, raise **Night Exposure** (for example to 0).
+
+### Making it look real (Megascans)
+
+Megascans are photo-scanned surfaces and rocks. Add a few from **Fab** and the jungle picks them up by itself the next time you press Play. You don't have to place or set anything.
+
+1. In the editor, open **Window > Fab** (or click the **Fab** button on the toolbar) and sign in with your Epic account.
+2. Search **Megascans**, and turn on the **Free** filter.
+3. Add these (click one, then **Add to Project**; pick **High** quality, or **Nanite** if it offers it):
+   - **One jungle ground surface**, for example search "forest floor", "mossy ground" or "jungle ground". Pick one under **Surfaces**.
+   - **One mud surface**, for example "wet mud" or "swamp mud". Optional: without one, the ground surface is used at the water's edge too.
+   - **One rock or cliff surface**, for example "mossy rock" or "cliff rock", for steep slopes and mountaintops.
+   - **Two to six rock models** (under **3D Assets**), for example "mossy rock", "boulder" or "cliff". These become the boulders and the stone spires.
+4. Wait for the downloads to finish (the bar at the bottom right), then press **Play**.
+
+How it picks: it looks in **Content/Fab** and **Content/Megascans** for surfaces with words like *forest, moss, ground* (ground), *mud, swamp* (mud) and *rock, cliff, stone* (cliffs), and rock models with *rock, boulder, cliff* or *stone* in their name. If it picks the wrong one, drag a **JungleWorld** into the level and set **Ground Material**, **Mud Material**, **Cliff Material** or **Boulder Meshes** under **Jungle > Art** yourself. **Ground Texture Size** sets how big the ground texture repeats (4 m by default). Turn off **Use Megascans** to go back to plain colors.
+
+**Electric Dreams art:** the rocks and ground surfaces from Epic's free **Electric Dreams Env** sample are Megascans too, and the jungle picks them up the same way once they're in **Content/Megascans** (with **Content/MSPresets** and **Content/Custom/CustomMaterials** for their materials). Its palms, ferns, leafy plants, flowers and hornbeam trees (in **Content/Megascans/3D_Plants**) replace the shape trees and undergrowth the same way, with invisible colliders on the trunks. Set **Tree Meshes**, **Palm Meshes**, **Plant Meshes** or **Flower Meshes** under **Jungle > Art** to choose them yourself. Its ground surfaces come as textures only, so the jungle builds their materials from the Megascans surface material itself. The project has **Substrate** and **virtual textures** turned on for them.
+
+**Graphics settings for an RTX 3060:** in the editor click **Settings** (top right of the level view) > **Engine Scalability Settings** and pick **High**. **Epic** looks a little better but runs slower. If it's slow, lower the JungleWeather's **Max Raindrops**, turn off **Volumetric Clouds**, or lower the JungleWorld's **Vegetation Density**.
 
 **If it runs slowly:** place a **JungleWorld** in the level as described next, and lower its **Vegetation Density** (for example to 0.5) or **Tree Draw Distance**.
 
@@ -163,9 +194,10 @@ Changes made while playing are lost when you stop. To keep a value, change its d
 | `JavelinMovementComponent` | Movement: walk, sprint, jump, dodge, plus custom **Flight** (with momentum and drift) and **Hover** modes, hard landings and skids. |
 | `JavelinHeatComponent` | Heat meter: gain while flying or hovering, cooling, overheat lockout. |
 | `CoolingVolume` | A box that cools the suit (water, waterfalls). Drag `CoolingVolume` into any level. |
-| `JungleWorld` | The rainforest: terrain, rivers, lakes, waterfalls, caves, ruins, trees and plants, fog and light, water cooling, and the ruin camps. |
+| `JungleWorld` | The rainforest: terrain, rivers, lakes, waterfalls, caves, ruins, trees and plants, fog and light, water cooling, the ruin camps, and finding Megascans ground and rock art. |
+| `JungleWeather` | The sky: day and night cycle, sun and moon, the storm (rain, lightning, thicker fog), volumetric clouds, sky light and the color grade. |
 | `FlightTestArena` | The old graybox course, plus the shooting range and first enemy camp (the jungle uses just those). |
-| `JavelinGameMode` | Spawns the javelin, HUD and jungle. |
+| `JavelinGameMode` | Spawns the javelin, HUD and jungle, and has the weather console commands. |
 | `JavelinWeaponComponent` | The gun: firing, ammo, reloading, aiming, spread, recoil, weak spot damage. |
 | `DustEffect` | Dust and smoke puffs built from basic shapes: landings, footsteps, jets, crashes, smoke trails. |
 | `ShotEffect` | Tracer, impact flash, puff and sparks for each shot, built from basic shapes. |
