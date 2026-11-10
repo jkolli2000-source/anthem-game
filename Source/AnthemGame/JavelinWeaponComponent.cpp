@@ -60,8 +60,8 @@ void UJavelinWeaponComponent::SetTriggerHeld(bool bHeld)
 {
 	bTriggerHeld = bHeld;
 
-	// Fire the first shot right away so taps feel responsive.
-	if (bHeld && ShotCooldown <= 0.f && CanFire())
+	// Fire the first shot right away so taps feel responsive. Guns that spin up wait for the barrels instead.
+	if (bHeld && SpinUpTime <= 0.f && ShotCooldown <= 0.f && CanFire())
 	{
 		FireShot();
 		ShotCooldown = 60.f / FireRate;
@@ -87,10 +87,24 @@ void UJavelinWeaponComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		StartReload();
 	}
 
+	// Rotary guns spin their barrels up while the trigger is held, and spin down quickly when it's let go.
+	bool bSpunUp = true;
+	if (SpinUpTime > 0.f)
+	{
+		const bool bSpinning = bTriggerHeld && CanFire();
+		SpinUp = bSpinning ? FMath::Min(1.f, SpinUp + DeltaTime / SpinUpTime) : FMath::Max(0.f, SpinUp - DeltaTime / (SpinUpTime * 0.6f));
+		bSpunUp = SpinUp >= 1.f;
+		BarrelSpin = SpinUp;
+	}
+	else
+	{
+		BarrelSpin = FMath::Max(GetTimeSinceLastShot() < 0.1f ? 1.f : 0.f, BarrelSpin - DeltaTime * 2.f);
+	}
+
 	// Leftover time carries into the next shot so the fire rate holds steady at any frame rate.
 	const float TimeBetweenShots = 60.f / FireRate;
 	ShotCooldown -= DeltaTime;
-	if (bTriggerHeld && ShotCooldown <= 0.f && CanFire())
+	if (bTriggerHeld && bSpunUp && ShotCooldown <= 0.f && CanFire())
 	{
 		FireShot();
 		ShotCooldown += TimeBetweenShots;
@@ -301,6 +315,18 @@ bool UJavelinWeaponComponent::RefillAmmo()
 	ReserveAmmo = MaxReserveAmmo;
 	bReloading = false;
 	return true;
+}
+
+void UJavelinWeaponComponent::ResetAmmo()
+{
+	Ammo = MagazineSize;
+	ReserveAmmo = MaxReserveAmmo;
+	bReloading = false;
+	ReloadRemaining = 0.f;
+	ShotCooldown = 0.f;
+	Bloom = 0.f;
+	SpinUp = 0.f;
+	SustainedShots = 0;
 }
 
 bool UJavelinWeaponComponent::AddReserveAmmo(int32 Rounds)

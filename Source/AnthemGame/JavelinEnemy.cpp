@@ -243,7 +243,8 @@ bool AJavelinEnemy::CanSee(const AJavelinCharacter* Player) const
 {
 	const FVector Eye = Muzzle->GetComponentLocation();
 	const FVector PlayerLocation = Player->GetActorLocation();
-	if (FVector::Dist(Eye, PlayerLocation) > SightRange || FVector::Dist(HomeLocation, PlayerLocation) > LeashRange)
+	// A suit running low profile (the EXO-07's stealth visor) has to get much closer before it's spotted.
+	if (FVector::Dist(Eye, PlayerLocation) > SightRange * Player->GetDetectionRangeScale() || FVector::Dist(HomeLocation, PlayerLocation) > LeashRange)
 	{
 		return false;
 	}

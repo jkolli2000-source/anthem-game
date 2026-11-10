@@ -84,6 +84,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Firing", meta = (ClampMin = "1"))
 	float FireRate = 600.f;
 
+	/**
+	 * Seconds the trigger has to be held before the first round fires, like a rotary machine gun's barrels
+	 * spinning up. 0 fires right away. The barrels keep spinning for a moment after you let go.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Firing", meta = (ClampMin = "0", Units = "s"))
+	float SpinUpTime = 0.f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weapon|Ammo", meta = (ClampMin = "1"))
 	int32 MagazineSize = 30;
 
@@ -172,6 +179,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Weapon")
 	bool AddReserveAmmo(int32 Rounds);
 
+	/** Fills the magazine and reserve and cancels any reload, as when switching to a different suit and gun. */
+	void ResetAmmo();
+
+	/** How far the barrels have spun up, 0 to 1. Always 1 for guns with no spin-up. */
+	UFUNCTION(BlueprintPure, Category = "Weapon")
+	float GetSpinUp() const { return SpinUpTime > 0.f ? SpinUp : 1.f; }
+
+	/** How fast the barrels are turning, 0 to 1, for spinning them on the model. Stays above 0 a moment after firing. */
+	float GetBarrelSpin() const { return BarrelSpin; }
+
 	UFUNCTION(BlueprintPure, Category = "Weapon")
 	bool IsAiming() const;
 
@@ -253,4 +270,8 @@ private:
 	/** Upward kick still waiting to settle back down. */
 	float RecoilToRecover = 0.f;
 	float RecoilKick = 0.f;
+
+	/** Spin-up progress, 0 to 1. */
+	float SpinUp = 0.f;
+	float BarrelSpin = 0.f;
 };

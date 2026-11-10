@@ -67,6 +67,7 @@ void AJavelinHUD::DrawHUD()
 	}
 	DrawWeaponInfo(Weapon);
 	DrawSuitStatus(Javelin);
+	DrawSuitInfo(Javelin, CenterX, CenterY);
 	DrawGear(Javelin, CenterX);
 	DrawEncounterInfo(Javelin, CenterX);
 
@@ -139,6 +140,8 @@ void AJavelinHUD::DrawHUD()
 			TEXT("In flight: W boost, S slow, dive steeply or skim water to cool"),
 			TEXT("Enemy camp: follow the red marker. Aim for glowing weak spots"),
 			TEXT("Green orbs repair armor, white orbs give ammo. Shields recharge"),
+			TEXT("1 Ranger   2 EXO-07   3 SEMPER-03  change suits (on the ground)     V  visor mode"),
+			TEXT("SEMPER-03: hold G or middle mouse to raise the ballistic shield"),
 		};
 		float Y = 20.f;
 		for (const TCHAR* Line : Lines)
@@ -294,13 +297,17 @@ void AJavelinHUD::DrawWorldMarkers(const UJavelinWeaponComponent* Weapon)
 	}
 
 	// Health bars and names over enemies that are fighting you or that you've just shot.
+	// SEMPER-03's Scan visor shows every enemy nearby, farther out, with their names in blue.
 	const APawn* Pawn = GetOwningPawn();
+	const AJavelinCharacter* Javelin = Cast<AJavelinCharacter>(Pawn);
+	const bool bScan = Javelin && Javelin->IsScanVisorActive();
+	const float MarkerRange = bScan ? EnemyMarkerRange * 2.2f : EnemyMarkerRange;
 	for (TActorIterator<AJavelinEnemy> It(GetWorld()); It; ++It)
 	{
 		const AJavelinEnemy* Enemy = *It;
 		FVector2D Screen;
-		const bool bShow = Enemy->IsEngaged() || Enemy->GetTimeSinceHit() < HealthBarShowTime;
-		if (!Enemy->IsAlive() || !bShow || !Pawn || FVector::Dist(Pawn->GetActorLocation(), Enemy->GetActorLocation()) > EnemyMarkerRange
+		const bool bShow = bScan || Enemy->IsEngaged() || Enemy->GetTimeSinceHit() < HealthBarShowTime;
+		if (!Enemy->IsAlive() || !bShow || !Pawn || FVector::Dist(Pawn->GetActorLocation(), Enemy->GetActorLocation()) > MarkerRange
 			|| !ProjectToScreen(Enemy->GetHealthBarLocation(), Screen))
 		{
 			continue;
@@ -308,7 +315,8 @@ void AJavelinHUD::DrawWorldMarkers(const UJavelinWeaponComponent* Weapon)
 		const float Width = 80.f;
 		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.6f), Screen.X - Width * 0.5f - 2.f, Screen.Y - 2.f, Width + 4.f, 10.f);
 		DrawRect(EnemyColor, Screen.X - Width * 0.5f, Screen.Y, Width * Enemy->GetHealthPercent(), 6.f);
-		DrawCenteredText(Enemy->GetEnemyName().ToString(), FLinearColor(1.f, 0.5f, 0.45f, 0.9f), Screen.X, Screen.Y - 18.f, 0.7f);
+		const FLinearColor NameColor = bScan && !Enemy->IsEngaged() ? FLinearColor(0.45f, 0.75f, 1.f, 0.9f) : FLinearColor(1.f, 0.5f, 0.45f, 0.9f);
+		DrawCenteredText(Enemy->GetEnemyName().ToString(), NameColor, Screen.X, Screen.Y - 18.f, 0.7f);
 	}
 
 	// Damage numbers rise and fade. Weak spot hits are bigger and orange.
@@ -649,5 +657,98 @@ void AJavelinHUD::DrawMissileLocks(const AJavelinCharacter* Javelin)
 			DrawLine(CornerX, CornerY, CornerX - Corner.X * Arm, CornerY, Color, 2.f);
 			DrawLine(CornerX, CornerY, CornerX, CornerY - Corner.Y * Arm, Color, 2.f);
 		}
+	}
+}
+
+void AJavelinHUD::DrawSuitInfo(const AJavelinCharacter* Javelin, float CenterX, float CenterY)
+{
+	const FJavelinSuitStats& Stats = Javelin->GetSuitStats();
+	const UJavelinWeaponComponent* Weapon = Javelin->GetWeapon();
+	const float Time = GetWorld()->GetTimeSeconds();
+	UFont* SmallFont = GEngine->GetSmallFont();
+	UFont* MediumFont = GEngine->GetMediumFont();
+
+	// Stacked above the shields and armor in the bottom left (the "SHIELDS DOWN" line sits just over the bars).
+	const float Left = 40.f;
+	const float Width = 300.f;
+	float Y = Canvas->ClipY - 70.f - 22.f - 48.f;
+
+	// SEMPER-03's ballistic shield: how much it can still take, and whether it's up.
+	if (Javelin->HasBallisticShield())
+	{
+		const float Percent = Javelin->GetShieldIntegrityPercent();
+		FLinearColor Fill(0.85f, 0.78f, 0.6f);
+		FString Label = TEXT("BALLISTIC SHIELD   G / middle mouse");
+		if (Javelin->IsShieldBroken())
+		{
+			Fill = FLinearColor(1.f, 0.2f, 0.15f, 0.6f + 0.4f * FMath::Sin(Time * 12.f));
+			Label = TEXT("SHIELD BROKEN");
+		}
+		else if (Javelin->IsShieldRaised())
+		{
+			Fill = FLinearColor::White;
+			Label = TEXT("SHIELD UP");
+		}
+		// Flash as rounds hit it.
+		const float SinceBlock = Javelin->GetTimeSinceShieldBlock();
+		if (SinceBlock < 0.15f)
+		{
+			Fill = FLinearColor::LerpUsingHSV(FLinearColor(1.f, 0.85f, 0.4f), Fill, SinceBlock / 0.15f);
+		}
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.55f), Left - 3.f, Y - 3.f, Width + 6.f, 14.f);
+		DrawRect(Fill, Left, Y, Width * Percent, 8.f);
+		DrawText(Label, FLinearColor(1.f, 1.f, 1.f, 0.85f), Left, Y - 18.f, SmallFont);
+		Y -= 44.f;
+	}
+
+	// Visor mode, in its own color, like the expression modes on the character sheets.
+	const FJavelinVisorMode& Shown = Javelin->GetVisorMode();
+	const FJavelinVisorMode& Selected = Javelin->GetSelectedVisorMode();
+	FString VisorText = FString::Printf(TEXT("VISOR  %s (%s)"), *Shown.Name, *Shown.Detail);
+	if (&Shown != &Selected && Selected.Effect != EJavelinVisorEffect::None)
+	{
+		VisorText += FString::Printf(TEXT("   %s on"), *Selected.Name);
+	}
+	FLinearColor VisorColor = Shown.Color;
+	const float MaxChannel = FMath::Max3(VisorColor.R, VisorColor.G, VisorColor.B);
+	if (MaxChannel > 0.f)
+	{
+		// Full brightness so dark colors still read on screen.
+		VisorColor = FLinearColor(VisorColor.R / MaxChannel, VisorColor.G / MaxChannel, VisorColor.B / MaxChannel, 1.f);
+	}
+	const float SinceVisor = Javelin->GetTimeSinceVisorChanged();
+	if (SinceVisor < 0.3f)
+	{
+		VisorColor = FLinearColor::LerpUsingHSV(FLinearColor::White, VisorColor, SinceVisor / 0.3f);
+	}
+	DrawRect(VisorColor, Left, Y + 3.f, 10.f, 10.f);
+	DrawText(VisorText, VisorColor, Left + 16.f, Y, SmallFont);
+	Y -= 24.f;
+
+	// Suit name and role.
+	DrawText(FString::Printf(TEXT("%s  -  %s"), *Stats.Name.ToString(), *Stats.Role.ToString()), FLinearColor::White, Left, Y, MediumFont, 1.f);
+
+	// HMG spin-up under the crosshair.
+	const float SpinUp = Weapon->GetSpinUp();
+	if (SpinUp > 0.f && SpinUp < 1.f && !Javelin->IsSuitDown())
+	{
+		const float BarWidth = 70.f;
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.5f), CenterX - BarWidth * 0.5f - 2.f, CenterY + 34.f, BarWidth + 4.f, 8.f);
+		DrawRect(FLinearColor(1.f, 0.6f, 0.2f), CenterX - BarWidth * 0.5f, CenterY + 36.f, BarWidth * SpinUp, 4.f);
+		DrawCenteredText(TEXT("SPINNING UP"), FLinearColor(1.f, 0.75f, 0.4f, 0.9f), CenterX, CenterY + 44.f, 0.7f);
+	}
+
+	// Big banner when a new suit locks on, and a reminder if you try to change in the air.
+	const float SinceChange = Javelin->GetTimeSinceSuitChanged();
+	if (SinceChange < 2.5f)
+	{
+		const float Alpha = FMath::Clamp((2.5f - SinceChange) / 0.6f, 0.f, 1.f);
+		DrawCenteredText(Stats.Name.ToString(), FLinearColor(1.f, 1.f, 1.f, Alpha), CenterX, CenterY - 190.f, 2.2f);
+		DrawCenteredText(FString::Printf(TEXT("%s   |   %s"), *Stats.Role.ToString(), *Stats.WeaponName.ToString()),
+			FLinearColor(1.f, 0.85f, 0.55f, Alpha), CenterX, CenterY - 140.f, 1.f);
+	}
+	if (Javelin->GetTimeSinceSuitChangeDenied() < 1.5f)
+	{
+		DrawCenteredText(TEXT("Land to change suits"), FLinearColor(1.f, 0.4f, 0.3f), CenterX, CenterY - 110.f, 1.1f);
 	}
 }

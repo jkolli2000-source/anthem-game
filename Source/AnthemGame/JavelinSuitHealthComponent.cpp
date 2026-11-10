@@ -67,6 +67,17 @@ bool UJavelinSuitHealthComponent::RepairArmor(float Amount)
 	return true;
 }
 
+void UJavelinSuitHealthComponent::SetMaxValues(float NewMaxShields, float NewMaxArmor)
+{
+	const float ShieldShare = MaxShields > 0.f ? Shields / MaxShields : 1.f;
+	const float ArmorShare = MaxArmor > 0.f ? Armor / MaxArmor : 1.f;
+	MaxShields = FMath::Max(0.f, NewMaxShields);
+	MaxArmor = FMath::Max(1.f, NewMaxArmor);
+	Shields = MaxShields * ShieldShare;
+	// A suit that is still standing keeps at least a sliver of armor.
+	Armor = bDown ? 0.f : FMath::Max(1.f, MaxArmor * ArmorShare);
+}
+
 void UJavelinSuitHealthComponent::Restore()
 {
 	bDown = false;

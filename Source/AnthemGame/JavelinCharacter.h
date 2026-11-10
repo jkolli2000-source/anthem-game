@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "JavelinSuitTypes.h"
 #include "JavelinCharacter.generated.h"
 
 class UCameraComponent;
@@ -17,6 +18,7 @@ class UJavelinMovementComponent;
 class UJavelinSuitHealthComponent;
 class UJavelinWeaponComponent;
 class UPointLightComponent;
+class UPrimitiveComponent;
 struct FInputActionValue;
 
 /** Camera framing for one movement state. The camera blends between these. */
@@ -202,8 +204,55 @@ public:
 	/** Rumbles a gamepad, if one is being used. Heavy uses the big motors too. */
 	void PlayRumble(float Intensity, float Duration, bool bHeavy);
 
+	// ---- Suits: Ranger, USMC EXO-07 and SEMPER-03 ----
+
+	/**
+	 * Switches to another suit: its look, gun, stats, gear tuning and visor modes. Only works on the ground
+	 * with the suit up. Shields and armor keep the same share of the new suit's maximum. Returns false if
+	 * the suit can't be changed right now.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Javelin|Suit")
+	bool SetSuitClass(EJavelinSuitClass NewClass);
+
+	UFUNCTION(BlueprintPure, Category = "Javelin|Suit")
+	EJavelinSuitClass GetSuitClass() const { return SuitClass; }
+
+	/** Name, role and numbers of the suit being worn. */
+	const FJavelinSuitStats& GetSuitStats() const { return ActiveStats; }
+
+	/** True when the suit can be changed: standing on the ground and not down. */
+	bool CanChangeSuit() const;
+	float GetTimeSinceSuitChanged() const;
+	float GetTimeSinceSuitChangeDenied() const;
+
+	/** The visor mode showing right now, including Combat and Alert, which switch on by themselves. */
+	const FJavelinVisorMode& GetVisorMode() const;
+	/** The mode picked with V. Its effect stays on even while Combat or Alert is showing. */
+	const FJavelinVisorMode& GetSelectedVisorMode() const;
+	float GetTimeSinceVisorChanged() const;
+
+	/** Enemies spot the suit from this share of their usual sight range. 0.5 in EXO-07 stealth, otherwise 1. */
+	float GetDetectionRangeScale() const;
+
+	/** True while SEMPER-03's Scan visor is on: the HUD shows every enemy nearby. */
+	bool IsScanVisorActive() const;
+
+	/** SEMPER-03 carries a ballistic shield. */
+	UFUNCTION(BlueprintPure, Category = "Javelin|Suit")
+	bool HasBallisticShield() const { return SuitClass == EJavelinSuitClass::Semper03; }
+
+	/** True while the ballistic shield is up far enough to block hits from the front. */
+	UFUNCTION(BlueprintPure, Category = "Javelin|Suit")
+	bool IsShieldRaised() const;
+
+	/** 0 to 1. The shield breaks at 0 and has to recover before it can be raised again. */
+	float GetShieldIntegrityPercent() const;
+	bool IsShieldBroken() const;
+	float GetTimeSinceShieldBlock() const;
+
 protected:
 	virtual void BeginPlay() override;
+	virtual void OnConstruction(const FTransform& Transform) override;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USpringArmComponent> CameraBoom;
@@ -231,6 +280,37 @@ protected:
 	/** Reboot back where you started instead of where you went down. */
 	UPROPERTY(EditAnywhere, Category = "Javelin|Health")
 	bool bRebootAtStart = true;
+
+	/** The suit you start in. Change suits in game with 1, 2 and 3 (D-pad left and right on a gamepad). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Javelin|Suit")
+	EJavelinSuitClass SuitClass = EJavelinSuitClass::Exo07;
+
+	/** How much damage SEMPER-03's ballistic shield soaks up before it breaks. */
+	UPROPERTY(EditAnywhere, Category = "Javelin|Suit|Ballistic Shield", meta = (ClampMin = "1"))
+	float ShieldMaxIntegrity = 650.f;
+
+	/** The shield blocks hits coming from within this angle of straight ahead. */
+	UPROPERTY(EditAnywhere, Category = "Javelin|Suit|Ballistic Shield", meta = (ClampMin = "0", ClampMax = "180", Units = "deg"))
+	float ShieldBlockAngle = 70.f;
+
+	/** Seconds without a hit before the shield starts to recover. */
+	UPROPERTY(EditAnywhere, Category = "Javelin|Suit|Ballistic Shield", meta = (ClampMin = "0", Units = "s"))
+	float ShieldRecoverDelay = 2.5f;
+
+	UPROPERTY(EditAnywhere, Category = "Javelin|Suit|Ballistic Shield", meta = (ClampMin = "0"))
+	float ShieldRecoverPerSecond = 160.f;
+
+	/** How long a broken shield can't be raised. */
+	UPROPERTY(EditAnywhere, Category = "Javelin|Suit|Ballistic Shield", meta = (ClampMin = "0", Units = "s"))
+	float ShieldBrokenTime = 4.f;
+
+	/** Walking speed with the shield up, as a share of normal. */
+	UPROPERTY(EditAnywhere, Category = "Javelin|Suit|Ballistic Shield", meta = (ClampMin = "0.1", ClampMax = "1"))
+	float ShieldMoveSpeedScale = 0.55f;
+
+	/** How fast the shield swings up and down, in full swings per second. */
+	UPROPERTY(EditAnywhere, Category = "Javelin|Suit|Ballistic Shield", meta = (ClampMin = "0.5"))
+	float ShieldRaiseSpeed = 5.f;
 
 	/** Root of the mech suit, built from basic shapes. Tilted for flight pitch and banking. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
@@ -295,6 +375,32 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
 	TArray<TObjectPtr<USceneComponent>> FootFlames;
 
+	// The two guns. Muzzle and MuzzleFlash above point at whichever one the current suit carries.
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> RifleMuzzle;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<UStaticMeshComponent> RifleMuzzleFlash;
+
+	/** End of EXO-07's HMG-88. */
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> HmgMuzzle;
+
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<UStaticMeshComponent> HmgMuzzleFlash;
+
+	/** The HMG-88's rotary barrels, spun as it fires. */
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> HmgBarrels;
+
+	/** SEMPER-03's ballistic shield. Carried at the left side, swung in front of the suit when raised. */
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<USceneComponent> ShieldPivot;
+
+	/** A small light in front of the visor, tinted to the visor mode so the helmet glows. */
+	UPROPERTY(VisibleAnywhere, Category = "Components|Suit")
+	TObjectPtr<UPointLightComponent> VisorLight;
+
 	UPROPERTY(EditAnywhere, Category = "Visuals|Paint")
 	FLinearColor PrimaryColor = FLinearColor(0.16f, 0.22f, 0.32f);
 
@@ -357,6 +463,35 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Input")
 	TObjectPtr<UInputAction> MissileAction;
+
+	/** 1, 2 and 3: switch straight to the Ranger, EXO-07 or SEMPER-03. */
+	UPROPERTY(EditAnywhere, Category = "Input|Suit")
+	TObjectPtr<UInputAction> SuitRangerAction;
+
+	UPROPERTY(EditAnywhere, Category = "Input|Suit")
+	TObjectPtr<UInputAction> SuitExoAction;
+
+	UPROPERTY(EditAnywhere, Category = "Input|Suit")
+	TObjectPtr<UInputAction> SuitSemperAction;
+
+	/** D-pad right and left: next and previous suit. */
+	UPROPERTY(EditAnywhere, Category = "Input|Suit")
+	TObjectPtr<UInputAction> SuitNextAction;
+
+	UPROPERTY(EditAnywhere, Category = "Input|Suit")
+	TObjectPtr<UInputAction> SuitPreviousAction;
+
+	/** V or D-pad up: next visor mode. */
+	UPROPERTY(EditAnywhere, Category = "Input|Suit")
+	TObjectPtr<UInputAction> VisorAction;
+
+	/** Hold to raise SEMPER-03's ballistic shield (G or middle mouse). */
+	UPROPERTY(EditAnywhere, Category = "Input|Suit")
+	TObjectPtr<UInputAction> ShieldAction;
+
+	/** Gamepad: click the right stick to raise or lower the shield. */
+	UPROPERTY(EditAnywhere, Category = "Input|Suit")
+	TObjectPtr<UInputAction> ShieldToggleAction;
 
 	/** Mouse look speed multiplier while aiming down sights, for finer aim. */
 	UPROPERTY(EditAnywhere, Category = "Input", meta = (ClampMin = "0.05", ClampMax = "1"))
@@ -639,6 +774,79 @@ private:
 
 	/** Builds the missile pod over the left shoulder. Called from BuildSuit. */
 	void BuildMissilePod(USceneComponent* Torso, UStaticMesh* Cube, UStaticMesh* Cylinder);
+
+	// ---- Suits (JavelinCharacterSuits.cpp) ----
+
+	/** Adds the armor, helmets and gear of the two Marine suits on top of the base frame. Called from BuildSuit. */
+	void BuildMarineSuits(UStaticMesh* Cube, UStaticMesh* Cylinder, UStaticMesh* Sphere, UStaticMesh* Cone);
+	void BuildExoArmor(UStaticMesh* Cube, UStaticMesh* Cylinder, UStaticMesh* Sphere, UStaticMesh* Cone);
+	void BuildHeavyMachineGun(UStaticMesh* Cube, UStaticMesh* Cylinder, UStaticMesh* Sphere);
+	void BuildSemperArmor(UStaticMesh* Cube, UStaticMesh* Cylinder, UStaticMesh* Sphere);
+	void BuildBallisticShield(UStaticMesh* Cube, UStaticMesh* Cylinder);
+	/** Scatters blocky digital camo patches over the Marine suits' armor plates. */
+	void BuildCamo(UStaticMesh* Cube);
+
+	/** Shows the parts that belong to the current suit and hides the rest. */
+	void UpdateSuitVisibility(const TArray<UPrimitiveComponent*>& Parts) const;
+	void UpdateSuitVisibility();
+
+	/** Paints every part for the current suit. */
+	void ApplyPaint();
+	void CaptureRangerStats();
+	FJavelinSuitStats MakeSuitStats(EJavelinSuitClass Class) const;
+	FJavelinSuitPaint MakeSuitPaint(EJavelinSuitClass Class) const;
+	void BuildVisorModes();
+	/** Applies the current suit to every part and component. */
+	void ApplySuitClass();
+
+	void UpdateVisor();
+	void UpdateShield(float DeltaSeconds);
+	void UpdateSuitExtras(float DeltaSeconds);
+
+	/** Takes what it can of a hit from the front on the ballistic shield. Returns the damage that gets through. */
+	float AbsorbWithShield(float Damage, const FVector& HitDirection);
+
+	void OnSuitRangerPressed();
+	void OnSuitExoPressed();
+	void OnSuitSemperPressed();
+	void OnSuitNextPressed();
+	void OnSuitPreviousPressed();
+	void OnVisorPressed();
+	void OnShieldPressed();
+	void OnShieldReleased();
+	void OnShieldTogglePressed();
+
+	/** Parts made in the constructor, kept just long enough to set them up. Not used after construction. */
+	TArray<UPrimitiveComponent*> ConstructionParts;
+	TArray<UStaticMeshComponent*> CamoCandidates;
+
+	FJavelinSuitStats RangerStats;
+	FJavelinSuitStats ActiveStats;
+	bool bCapturedRangerStats = false;
+	float SuitChangedTime = -100.f;
+	float SuitChangeDeniedTime = -100.f;
+
+	TArray<FJavelinVisorMode> VisorModes;
+	FJavelinVisorMode CombatVisor;
+	FJavelinVisorMode AlertVisor;
+	bool bHasAutoVisors = false;
+	int32 VisorIndex = 0;
+	/** Which mode is showing: the selected index, or -1 for Combat and -2 for Alert. */
+	int32 ShownVisorKey = -100;
+	float VisorChangedTime = -100.f;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> VisorMaterials;
+
+	bool bWantsShield = false;
+	/** 0 carried at the side, 1 fully raised. */
+	float ShieldRaise = 0.f;
+	float ShieldIntegrity = 0.f;
+	float LastShieldHitTime = -100.f;
+	float ShieldBrokenUntil = -100.f;
+
+	FVector MuzzleFlashScale = FVector(0.14f, 0.14f, 0.24f);
+	float BarrelAngle = 0.f;
 
 	FJavelinSuitPose CurrentPose;
 	float AnimTime = 0.f;

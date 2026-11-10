@@ -53,6 +53,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Suit Health")
 	bool RepairArmor(float Amount);
 
+	/**
+	 * Changes the maximum shields and armor, as when switching suits. Current shields and armor keep the same
+	 * share of the new maximum, so a half-damaged suit stays half damaged.
+	 */
+	void SetMaxValues(float NewMaxShields, float NewMaxArmor);
+
 	/** Brings a downed suit back with full shields and armor. */
 	UFUNCTION(BlueprintCallable, Category = "Suit Health")
 	void Restore();

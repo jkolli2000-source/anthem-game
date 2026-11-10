@@ -38,14 +38,6 @@ namespace
 		return Profile;
 	}
 
-	void SetPartColor(UStaticMeshComponent* Part, const FLinearColor& Color)
-	{
-		if (UMaterialInstanceDynamic* Material = Part->CreateDynamicMaterialInstance(0))
-		{
-			Material->SetVectorParameterValue(TEXT("Color"), Color);
-		}
-	}
-
 	// Component tags that say how BeginPlay paints each suit part.
 	const FName PaintPrimary(TEXT("Paint.Primary"));
 	const FName PaintSecondary(TEXT("Paint.Secondary"));
@@ -182,6 +174,14 @@ UStaticMeshComponent* AJavelinCharacter::CreatePart(FName Name, USceneComponent*
 	Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Part->SetGenerateOverlapEvents(false);
 	Part->ComponentTags.Add(Paint);
+
+	// Remembered for the rest of construction: every part gets shown or hidden for the starting suit, and the
+	// big painted boxes get camo patches on the Marine suits.
+	ConstructionParts.Add(Part);
+	if ((Paint == PaintPrimary || Paint == PaintSecondary) && PartMesh && PartMesh->GetFName() == TEXT("Cube"))
+	{
+		CamoCandidates.Add(Part);
+	}
 	return Part;
 }
 
@@ -221,7 +221,9 @@ void AJavelinCharacter::BuildSuit()
 	CreatePart(TEXT("Abdomen"), TorsoPivot, Cube, FVector(0.f, 0.f, 10.f), FVector(0.32f, 0.44f, 0.26f), PaintFrame);
 	CreatePart(TEXT("Chest"), TorsoPivot, Cube, FVector(2.f, 0.f, 42.f), FVector(0.5f, 0.78f, 0.46f), PaintPrimary);
 	CreatePart(TEXT("ChestPlate"), TorsoPivot, Cube, FVector(24.f, 0.f, 44.f), FVector(0.08f, 0.62f, 0.32f), PaintSecondary, FRotator(-8.f, 0.f, 0.f));
-	CreatePart(TEXT("ChestCore"), TorsoPivot, Cylinder, FVector(29.f, 0.f, 46.f), FVector(0.14f, 0.14f, 0.04f), PaintAccent, FRotator(90.f, 0.f, 0.f));
+	// The Marine suits wear their insignia on the chest instead of the Ranger's glowing core.
+	CreatePart(TEXT("ChestCore"), TorsoPivot, Cylinder, FVector(29.f, 0.f, 46.f), FVector(0.14f, 0.14f, 0.04f), PaintAccent, FRotator(90.f, 0.f, 0.f))
+		->ComponentTags.Add(JavelinSuitTags::Ranger);
 	CreatePart(TEXT("Collar"), TorsoPivot, Cube, FVector(-2.f, 0.f, 66.f), FVector(0.42f, 0.5f, 0.08f), PaintTrim);
 
 	// Jet pack with two nozzles pointing down the back
@@ -240,10 +242,17 @@ void AJavelinCharacter::BuildSuit()
 	// Helmet
 	HeadPivot = CreatePivot(TEXT("HeadPivot"), TorsoPivot, FVector(4.f, 0.f, 70.f));
 	CreatePart(TEXT("Neck"), HeadPivot, Cylinder, FVector(0.f, 0.f, 2.f), FVector(0.18f, 0.18f, 0.1f), PaintFrame);
-	CreatePart(TEXT("Helmet"), HeadPivot, Sphere, FVector(0.f, 0.f, 16.f), FVector(0.34f, 0.3f, 0.36f), PaintPrimary);
-	CreatePart(TEXT("HelmetCrest"), HeadPivot, Cube, FVector(-2.f, 0.f, 32.f), FVector(0.3f, 0.06f, 0.06f), PaintTrim);
-	CreatePart(TEXT("Faceplate"), HeadPivot, Cube, FVector(13.f, 0.f, 12.f), FVector(0.1f, 0.24f, 0.16f), PaintSecondary);
-	CreatePart(TEXT("Visor"), HeadPivot, Cube, FVector(16.f, 0.f, 19.f), FVector(0.06f, 0.24f, 0.06f), PaintAccent);
+	// The round helmet and faceplate are shared by the Ranger and EXO-07; SEMPER-03 wears a boxy one instead.
+	UStaticMeshComponent* Helmet = CreatePart(TEXT("Helmet"), HeadPivot, Sphere, FVector(0.f, 0.f, 16.f), FVector(0.34f, 0.3f, 0.36f), PaintPrimary);
+	Helmet->ComponentTags.Add(JavelinSuitTags::Ranger);
+	Helmet->ComponentTags.Add(JavelinSuitTags::Exo07);
+	CreatePart(TEXT("HelmetCrest"), HeadPivot, Cube, FVector(-2.f, 0.f, 32.f), FVector(0.3f, 0.06f, 0.06f), PaintTrim)
+		->ComponentTags.Add(JavelinSuitTags::Ranger);
+	UStaticMeshComponent* Faceplate = CreatePart(TEXT("Faceplate"), HeadPivot, Cube, FVector(13.f, 0.f, 12.f), FVector(0.1f, 0.24f, 0.16f), PaintSecondary);
+	Faceplate->ComponentTags.Add(JavelinSuitTags::Ranger);
+	Faceplate->ComponentTags.Add(JavelinSuitTags::Exo07);
+	CreatePart(TEXT("Visor"), HeadPivot, Cube, FVector(16.f, 0.f, 19.f), FVector(0.06f, 0.24f, 0.06f), JavelinPaintTags::Visor)
+		->ComponentTags.Add(JavelinSuitTags::Ranger);
 
 	for (int32 Side = 0; Side < 2; ++Side)
 	{
@@ -288,24 +297,41 @@ void AJavelinCharacter::BuildSuit()
 		(Side == 0 ? LeftKnee : RightKnee) = Knee;
 		(Side == 0 ? LeftAnkle : RightAnkle) = Ankle;
 	}
+
+	// The two Marine suits' armor and gear go on the same frame, and only the current suit's parts are shown.
+	BuildMarineSuits(Cube, Cylinder, Sphere, Cone);
+	BuildCamo(Cube);
+	UpdateSuitVisibility(ConstructionParts);
+	ConstructionParts.Empty();
+	CamoCandidates.Empty();
 }
 
 void AJavelinCharacter::BuildGun(USceneComponent* Hand, UStaticMesh* Cube, UStaticMesh* Cylinder, UStaticMesh* Sphere)
 {
 	// An assault rifle gripped in the right hand, its barrel running on down the line of the forearm.
 	// In the elbow's space -Z runs down the forearm and +X is the top of the gun when the arm is raised to aim.
-	CreatePart(TEXT("GunReceiver"), Hand, Cube, FVector(3.f, 0.f, -58.f), FVector(0.16f, 0.09f, 0.4f), PaintFrame);
-	CreatePart(TEXT("GunTrim"), Hand, Cube, FVector(3.f, 4.8f, -58.f), FVector(0.1f, 0.01f, 0.3f), PaintTrim);
-	CreatePart(TEXT("GunMagazine"), Hand, Cube, FVector(-6.f, 0.f, -64.f), FVector(0.1f, 0.06f, 0.14f), PaintSecondary, FRotator(-10.f, 0.f, 0.f));
-	CreatePart(TEXT("GunSight"), Hand, Cube, FVector(12.f, 0.f, -52.f), FVector(0.04f, 0.04f, 0.1f), PaintAccent);
-	CreatePart(TEXT("GunShroud"), Hand, Cylinder, FVector(6.f, 0.f, -84.f), FVector(0.08f, 0.08f, 0.12f), PaintSecondary);
-	CreatePart(TEXT("GunBarrel"), Hand, Cylinder, FVector(6.f, 0.f, -95.f), FVector(0.05f, 0.05f, 0.24f), PaintFrame);
+	// Carried by the Ranger and SEMPER-03. EXO-07 carries the HMG-88 instead (BuildHeavyMachineGun).
+	UStaticMeshComponent* const RifleParts[] = {
+		CreatePart(TEXT("GunReceiver"), Hand, Cube, FVector(3.f, 0.f, -58.f), FVector(0.16f, 0.09f, 0.4f), PaintFrame),
+		CreatePart(TEXT("GunTrim"), Hand, Cube, FVector(3.f, 4.8f, -58.f), FVector(0.1f, 0.01f, 0.3f), PaintTrim),
+		CreatePart(TEXT("GunMagazine"), Hand, Cube, FVector(-6.f, 0.f, -64.f), FVector(0.1f, 0.06f, 0.14f), PaintSecondary, FRotator(-10.f, 0.f, 0.f)),
+		CreatePart(TEXT("GunSight"), Hand, Cube, FVector(12.f, 0.f, -52.f), FVector(0.04f, 0.04f, 0.1f), PaintAccent),
+		CreatePart(TEXT("GunShroud"), Hand, Cylinder, FVector(6.f, 0.f, -84.f), FVector(0.08f, 0.08f, 0.12f), PaintSecondary),
+		CreatePart(TEXT("GunBarrel"), Hand, Cylinder, FVector(6.f, 0.f, -95.f), FVector(0.05f, 0.05f, 0.24f), PaintFrame),
+	};
+	for (UStaticMeshComponent* Part : RifleParts)
+	{
+		Part->ComponentTags.Add(JavelinSuitTags::Ranger);
+		Part->ComponentTags.Add(JavelinSuitTags::Semper03);
+	}
 
 	Muzzle = CreatePivot(TEXT("Muzzle"), Hand, FVector(6.f, 0.f, -108.f));
+	RifleMuzzle = Muzzle;
 
 	MuzzleFlash = CreatePart(TEXT("MuzzleFlash"), Muzzle, Sphere, FVector(0.f, 0.f, -8.f), FVector(0.14f, 0.14f, 0.24f), PaintMuzzle);
 	MuzzleFlash->SetCastShadow(false);
 	MuzzleFlash->SetVisibility(false);
+	RifleMuzzleFlash = MuzzleFlash;
 
 	MuzzleLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("MuzzleLight"));
 	MuzzleLight->SetupAttachment(Muzzle);
@@ -350,50 +376,17 @@ void AJavelinCharacter::BeginPlay()
 	// Picks up a pivot height changed in the editor.
 	CameraBoom->SetRelativeLocation(FVector(0.f, 0.f, CameraPivotHeight));
 
-	struct FPaintSlot
-	{
-		FName Tag;
-		FLinearColor Color;
-	};
-	const FPaintSlot Paints[] = {
-		{ PaintPrimary, PrimaryColor },
-		{ PaintSecondary, SecondaryColor },
-		{ PaintTrim, TrimColor },
-		{ PaintFrame, FrameColor },
-		{ PaintAccent, AccentColor },
-		{ PaintMuzzle, MuzzleFlashColor },
-	};
-
-	TInlineComponentArray<UStaticMeshComponent*> Parts(this);
-	for (UStaticMeshComponent* Part : Parts)
-	{
-		if (Part->ComponentHasTag(PaintGlow))
-		{
-			// One shared material so every thruster glow and flame changes color together.
-			if (!ThrusterMaterial)
-			{
-				ThrusterMaterial = UMaterialInstanceDynamic::Create(Part->GetMaterial(0), this);
-			}
-			Part->SetMaterial(0, ThrusterMaterial);
-			continue;
-		}
-		for (const FPaintSlot& Paint : Paints)
-		{
-			if (Part->ComponentHasTag(Paint.Tag))
-			{
-				SetPartColor(Part, Paint.Color);
-				break;
-			}
-		}
-	}
+	// Remember the Ranger's numbers as set on the components, then dress the suit and set up its gun, stats and visor.
+	CaptureRangerStats();
+	ApplySuitClass();
+	// Show the suit's name banner as the game starts.
+	SuitChangedTime = GetWorld()->GetTimeSeconds();
 
 	Heat->OnOverheated.AddDynamic(this, &AJavelinCharacter::HandleOverheated);
 	SuitHealth->OnSuitDown.AddDynamic(this, &AJavelinCharacter::HandleSuitDown);
 	StartLocation = GetActorLocation();
 	StartRotation = GetActorRotation();
-	Weapon->SetMuzzle(Muzzle);
 	Abilities->SetLaunchPoints(LeftShoulder, MissileLauncher);
-	MuzzleLight->SetLightColor(MuzzleFlashColor);
 	LastYaw = GetActorRotation().Yaw;
 	LastVelocity = GetVelocity();
 
@@ -445,6 +438,14 @@ void AJavelinCharacter::CreateDefaultInput()
 	ReloadAction = MakeAction(TEXT("IA_Reload"), EInputActionValueType::Boolean);
 	GrenadeAction = MakeAction(TEXT("IA_Grenade"), EInputActionValueType::Boolean);
 	MissileAction = MakeAction(TEXT("IA_Missiles"), EInputActionValueType::Boolean);
+	SuitRangerAction = MakeAction(TEXT("IA_SuitRanger"), EInputActionValueType::Boolean);
+	SuitExoAction = MakeAction(TEXT("IA_SuitExo07"), EInputActionValueType::Boolean);
+	SuitSemperAction = MakeAction(TEXT("IA_SuitSemper03"), EInputActionValueType::Boolean);
+	SuitNextAction = MakeAction(TEXT("IA_SuitNext"), EInputActionValueType::Boolean);
+	SuitPreviousAction = MakeAction(TEXT("IA_SuitPrevious"), EInputActionValueType::Boolean);
+	VisorAction = MakeAction(TEXT("IA_Visor"), EInputActionValueType::Boolean);
+	ShieldAction = MakeAction(TEXT("IA_Shield"), EInputActionValueType::Boolean);
+	ShieldToggleAction = MakeAction(TEXT("IA_ShieldToggle"), EInputActionValueType::Boolean);
 
 	UInputMappingContext* Context = NewObject<UInputMappingContext>(this, TEXT("IMC_Javelin"));
 
@@ -499,6 +500,16 @@ void AJavelinCharacter::CreateDefaultInput()
 	Map(GrenadeAction, EKeys::Gamepad_LeftShoulder);
 	Map(MissileAction, EKeys::E);
 	Map(MissileAction, EKeys::Gamepad_RightShoulder);
+	Map(SuitRangerAction, EKeys::One);
+	Map(SuitExoAction, EKeys::Two);
+	Map(SuitSemperAction, EKeys::Three);
+	Map(SuitNextAction, EKeys::Gamepad_DPad_Right);
+	Map(SuitPreviousAction, EKeys::Gamepad_DPad_Left);
+	Map(VisorAction, EKeys::V);
+	Map(VisorAction, EKeys::Gamepad_DPad_Up);
+	Map(ShieldAction, EKeys::G);
+	Map(ShieldAction, EKeys::MiddleMouseButton);
+	Map(ShieldToggleAction, EKeys::Gamepad_RightThumbstick);
 
 	DefaultMappingContext = Context;
 }
@@ -572,6 +583,39 @@ void AJavelinCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 	if (MissileAction)
 	{
 		Input->BindAction(MissileAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnMissilePressed);
+	}
+	if (SuitRangerAction)
+	{
+		Input->BindAction(SuitRangerAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnSuitRangerPressed);
+	}
+	if (SuitExoAction)
+	{
+		Input->BindAction(SuitExoAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnSuitExoPressed);
+	}
+	if (SuitSemperAction)
+	{
+		Input->BindAction(SuitSemperAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnSuitSemperPressed);
+	}
+	if (SuitNextAction)
+	{
+		Input->BindAction(SuitNextAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnSuitNextPressed);
+	}
+	if (SuitPreviousAction)
+	{
+		Input->BindAction(SuitPreviousAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnSuitPreviousPressed);
+	}
+	if (VisorAction)
+	{
+		Input->BindAction(VisorAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnVisorPressed);
+	}
+	if (ShieldAction)
+	{
+		Input->BindAction(ShieldAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnShieldPressed);
+		Input->BindAction(ShieldAction, ETriggerEvent::Completed, this, &AJavelinCharacter::OnShieldReleased);
+	}
+	if (ShieldToggleAction)
+	{
+		Input->BindAction(ShieldToggleAction, ETriggerEvent::Started, this, &AJavelinCharacter::OnShieldTogglePressed);
 	}
 }
 
@@ -929,7 +973,8 @@ bool AJavelinCharacter::CanAimWeapon() const
 bool AJavelinCharacter::IsInCombatStance() const
 {
 	const float SinceGear = FMath::Min(Abilities->GetTimeSinceUsed(EJavelinGear::Grenade), Abilities->GetTimeSinceUsed(EJavelinGear::Missiles));
-	return CanFireWeapon() && (Weapon->IsAiming() || Weapon->GetTimeSinceLastShot() < CombatStanceTime || SinceGear < CombatStanceTime);
+	return CanFireWeapon() && (Weapon->IsAiming() || Weapon->GetTimeSinceLastShot() < CombatStanceTime || SinceGear < CombatStanceTime
+		|| ShieldRaise > 0.5f);
 }
 
 void AJavelinCharacter::UpdateCombatFacing()
@@ -954,7 +999,7 @@ void AJavelinCharacter::UpdateMuzzleFlash()
 		// A different size and spin each frame so rapid fire flickers.
 		const float Size = FMath::FRandRange(0.8f, 1.3f);
 		MuzzleFlash->SetRelativeRotation(FRotator(0.f, FMath::FRandRange(0.f, 360.f), 0.f));
-		MuzzleFlash->SetRelativeScale3D(FVector(0.14f, 0.14f, 0.24f) * Size);
+		MuzzleFlash->SetRelativeScale3D(MuzzleFlashScale * Size);
 	}
 }
 
@@ -986,8 +1031,15 @@ float AJavelinCharacter::TakeDamage(float DamageAmount, FDamageEvent const& Dama
 		HitDirection = PointDamage.ShotDirection.GetSafeNormal();
 	}
 
+	// SEMPER-03's ballistic shield soaks up hits from the front while it's raised.
+	const float GetsThrough = AbsorbWithShield(Incoming, HitDirection);
+	if (GetsThrough <= 0.f)
+	{
+		return 0.f;
+	}
+
 	const bool bHadShields = SuitHealth->GetShields() > 0.f;
-	const float Dealt = SuitHealth->ApplyDamage(Incoming, Source);
+	const float Dealt = SuitHealth->ApplyDamage(GetsThrough, Source);
 	if (Dealt <= 0.f)
 	{
 		return 0.f;
@@ -1029,6 +1081,7 @@ void AJavelinCharacter::HandleSuitDown()
 	JavelinMovement->SetFlightInput(FVector2D::ZeroVector);
 	Weapon->SetTriggerHeld(false);
 	Weapon->SetWantsToAim(false);
+	bWantsShield = false;
 	GetWorldTimerManager().SetTimer(RebootTimer, this, &AJavelinCharacter::Reboot, FMath::Max(RebootTime, 0.1f));
 }
 
@@ -1046,6 +1099,8 @@ void AJavelinCharacter::Reboot()
 	SuitHealth->Restore();
 	Weapon->RefillAmmo();
 	Abilities->ResetCooldowns();
+	ShieldIntegrity = ShieldMaxIntegrity;
+	ShieldBrokenUntil = -100.f;
 }
 
 float AJavelinCharacter::GetTimeUntilReboot() const
@@ -1056,6 +1111,8 @@ float AJavelinCharacter::GetTimeUntilReboot() const
 void AJavelinCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	UpdateShield(DeltaSeconds);
+	UpdateVisor();
 	UpdateCombatFacing();
 	UpdateMuzzleFlash();
 	CheckGearUsed();
@@ -1064,6 +1121,7 @@ void AJavelinCharacter::Tick(float DeltaSeconds)
 	UpdateDodge(DeltaSeconds);
 	UpdateCamera(DeltaSeconds);
 	UpdateVisuals(DeltaSeconds);
+	UpdateSuitExtras(DeltaSeconds);
 }
 
 FVector AJavelinCharacter::GetFeetLocation() const
@@ -1875,6 +1933,14 @@ FJavelinSuitPose AJavelinCharacter::ComputeTargetPose(float DeltaSeconds)
 		Pose.ElbowBend[1] = 85.f;
 		Pose.ShoulderPitch[0] = 45.f + Fumble;
 		Pose.ElbowBend[0] = 75.f;
+	}
+
+	// SEMPER-03's ballistic shield: the left arm swings it up in front of the suit.
+	if (ShieldRaise > 0.f)
+	{
+		const float Raise = FMath::SmoothStep(0.f, 1.f, ShieldRaise);
+		Pose.ShoulderPitch[0] = FMath::Lerp(Pose.ShoulderPitch[0], 62.f, Raise);
+		Pose.ElbowBend[0] = FMath::Lerp(Pose.ElbowBend[0], 58.f, Raise);
 	}
 
 	// Grenade throw: the left arm follows through from overhead down toward the target.
