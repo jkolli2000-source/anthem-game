@@ -8,8 +8,8 @@
 /**
  * Crosshair, hit markers, damage numbers, target and enemy health bars, ammo,
  * shields and armor, damage direction arrows, heat bar, movement state, gear
- * cooldown icons and missile lock-on brackets, the enemy camp's wave status
- * and a controls reminder, drawn without any UI assets.
+ * cooldown icons and missile lock-on brackets, the enemy camp's wave status,
+ * the suit and visor mode, and a controls reminder, drawn without any UI assets.
  */
 UCLASS()
 class ANTHEMGAME_API AJavelinHUD : public AHUD
@@ -34,6 +34,8 @@ private:
 	void DrawGear(const class AJavelinCharacter* Javelin, float CenterX);
 	void DrawGearGlyph(EJavelinGear Gear, float CenterX, float CenterY, const FLinearColor& Color);
 	void DrawMissileLocks(const class AJavelinCharacter* Javelin);
+	/** Suit name, visor mode, the ballistic shield bar, the HMG's spin-up and the suit-change banner. */
+	void DrawSuitInfo(const class AJavelinCharacter* Javelin, float CenterX, float CenterY);
 
 	/** Screen position of a world point, or false if it's behind the camera. */
 	bool ProjectToScreen(const FVector& WorldLocation, FVector2D& OutScreen) const;

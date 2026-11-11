@@ -77,8 +77,32 @@ You don't need to place anything. When you press Play, the game spawns your jave
 | Reload | R | X |
 | Frag grenade | Q | Left bumper |
 | Homing missiles | E | Right bumper |
+| Change suit: Ranger / EXO-07 / SEMPER-03 (on the ground) | 1 / 2 / 3 | D-pad left / right |
+| Next visor mode | V | D-pad up |
+| Raise SEMPER-03's ballistic shield | Hold G or middle mouse | Click right stick (click again to lower) |
 
 You can shoot and use gear on the ground, while jumping or falling, and while hovering. Like in Anthem, weapons and gear are stowed while you fly: press **Space** to drop into a hover and shoot.
+
+### The suits
+
+You start in **USMC EXO-07**. Press **1**, **2** or **3** on the ground to switch suits (a banner shows the new suit's name). Shields and armor keep the same share when you switch, and your gun is reloaded.
+
+| | Ranger | USMC EXO-07 | SEMPER-03 |
+|---|---|---|---|
+| Role | All-rounder | Heavy Assault / Area Denial | Assault / Defense |
+| Look | Blue and orange | Woodland camo, horned helmet, U.S. flag, assault pack | Desert camo, boxy four-lens helmet, thruster pack |
+| Gun | Assault rifle | **HMG-88** heavy machine gun: 150-round drum, barrels spin up for half a second before it fires | **M27-X** assault rifle with scope |
+| Special | | Toughest armor, hardest-hitting frag grenades | **Ballistic shield**: blocks hits from the front until it breaks |
+| Speed | Normal | Slow on foot and in the air, runs hotter | Quickest dodge, cooler and faster flight |
+
+**Visor modes**, like the character sheets. **V** steps through the ones you can pick; the visor turns red by itself while you aim or shoot, and amber (EXO-07) when you're hit.
+
+- EXO-07: **Standard** (blue), **Support** (green: shields recharge sooner and faster), **Stealth** (purple: enemies only spot you from half as far, until you shoot or get hit).
+- SEMPER-03: **Normal** (optical), **Tactical** (green night vision for the dark and the storm), **Scan** (blue: shows every enemy nearby on the HUD, even ones that haven't spotted you).
+
+**Ballistic shield** (SEMPER-03): hold **G** or the **middle mouse button** to swing it up in front of you. It soaks up hits from in front until its bar runs out, then it's broken for 4 seconds. You walk slower and can't sprint with it up, but you can still shoot past it. It goes back to your side when you fly or hover.
+
+To start in a different suit, change `SuitClass = EJavelinSuitClass::Exo07` in `JavelinCharacter.h` to `Ranger` or `Semper03`. Each suit's numbers (damage, speed, armor and so on) are in `MakeSuitStats` in `JavelinCharacterSuits.cpp`, and its colors in `MakeSuitPaint`.
 
 ### The jungle
 
@@ -190,6 +214,8 @@ Changes made while playing are lost when you stop. To keep a value, change its d
 
 | File | What it does |
 |---|---|
+| `JavelinCharacterSuits.cpp` | The three suits: the EXO-07 and SEMPER-03 armor, HMG-88 and ballistic shield, camo, each suit's paint and stats, switching suits, visor modes. Suit numbers are in `MakeSuitStats`, colors in `MakeSuitPaint`. |
+| `JavelinSuitTypes` | The suit and visor mode lists and the stats each suit has. |
 | `JavelinCharacter` | The player suit: camera, input bindings, mech suit body and gun, poses, the planted-foot walking gait (leg IK), flight tilt and banking, plus the feel: camera shake, landing crouch, footsteps, dodge effects, flinching, dust and rumble. |
 | `JavelinMovementComponent` | Movement: walk, sprint, jump, dodge, plus custom **Flight** (with momentum and drift) and **Hover** modes, hard landings and skids. |
 | `JavelinHeatComponent` | Heat meter: gain while flying or hovering, cooling, overheat lockout. |
